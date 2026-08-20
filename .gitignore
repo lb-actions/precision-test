@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+*.js.map
+*.d.ts
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Threat model reports
+threat-model-*/

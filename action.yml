@@ -1,0 +1,62 @@
+name: 'Precision Test Selector'
+description: 'Coverage-based precision test selector with line, function, and file granularity'
+author: 'openlibing'
+
+inputs:
+  github-pr:
+    description: 'GitHub PR, format: owner/repo#pr_number'
+    required: false
+  source-dir:
+    description: 'Source code directory (default: covstub)'
+    required: false
+    default: 'covstub'
+  map-file:
+    description: 'Test case map file (default: test_case_map.json)'
+    required: false
+    default: 'test_case_map.json'
+  coverage-dir:
+    description: 'Coverage data directory (default: ./coverage)'
+    required: false
+    default: 'coverage'
+  build-map:
+    description: 'Rebuild test case mapping'
+    required: false
+    default: 'false'
+  min-affected:
+    description: 'Minimum affected lines threshold (default: 1)'
+    required: false
+    default: '1'
+  dedup:
+    description: 'Enable deduplication (keep only one test for same covered lines)'
+    required: false
+    default: 'false'
+  enable-line-match:
+    description: 'Enable line-level matching'
+    required: false
+    default: 'true'
+  enable-function-match:
+    description: 'Enable function-level matching'
+    required: false
+    default: 'true'
+  enable-file-match:
+    description: 'Enable file-level matching'
+    required: false
+    default: 'true'
+  skip-imports:
+    description: 'Skip import statement lines (only effective for function-level matching)'
+    required: false
+    default: 'false'
+  repo-name:
+    description: 'Repository name for path normalization (e.g., vllm_ascend)'
+    required: false
+    default: 'vllm_ascend'
+
+outputs:
+  test-list-file:
+    description: 'Path to the file containing recommended test cases'
+  test-count:
+    description: 'Number of test cases recommended'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

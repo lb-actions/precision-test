@@ -1,0 +1,35 @@
+{
+  "name": "precision-test-selector",
+  "version": "1.0.0",
+  "description": "GitHub Actions plugin for precision test selection based on coverage data",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc && ncc build dist/index.js --license licenses.txt && cp src/selector.py dist/",
+    "compile": "tsc",
+    "package": "npm run build && zip -r precision-test-v$(node -p \"require('./package.json').version\").zip dist/ action.yml precision_test/"
+  },
+  "keywords": [
+    "github",
+    "actions",
+    "test",
+    "coverage",
+    "precision"
+  ],
+  "author": "openlibing",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/exec": "^1.1.1"
+  },
+  "overrides": {
+    "undici": "^6.28.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@vercel/ncc": "^0.38.1",
+    "typescript": "^5.9.3"
+  }
+}
