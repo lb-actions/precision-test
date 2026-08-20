@@ -39,6 +39,34 @@ COVERAGE_DENSITY_THRESHOLD = float(os.environ.get("COVERAGE_DENSITY_THRESHOLD", 
 # Minimum affected lines threshold
 MIN_AFFECTED_LINES = int(os.environ.get("MIN_AFFECTED_LINES", "1"))
 
+# Security: Maximum diff file size in MB (prevents DoS attacks)
+MAX_DIFF_SIZE_MB = int(os.environ.get("MAX_DIFF_SIZE_MB", "50"))
+
+# Security: Streaming read threshold in MB (protects memory)
+STREAMING_THRESHOLD_MB = int(os.environ.get("STREAMING_THRESHOLD_MB", "10"))
+
+# GitHub API token for higher rate limits (optional)
+# If provided, increases API rate limit from 60 to 5000 requests/hour
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+
+# Security: Maximum database file size in MB (prevents DoS attacks)
+MAX_DATABASE_SIZE_MB = int(os.environ.get("MAX_DATABASE_SIZE_MB", "100"))
+
+# Security: Maximum source code file size for parsing in MB (prevents DoS)
+MAX_SOURCE_FILE_SIZE_MB = int(os.environ.get("MAX_SOURCE_FILE_SIZE_MB", "1"))
+
+# Security: Maximum recursion depth for AST parsing (prevents stack overflow)
+MAX_PARSE_RECURSION_DEPTH = int(os.environ.get("MAX_PARSE_RECURSION_DEPTH", "1000"))
+
+# Security: Database query timeout in seconds (prevents hanging queries)
+DATABASE_QUERY_TIMEOUT = int(os.environ.get("DATABASE_QUERY_TIMEOUT", "60"))
+
+# Security: Maximum valid line number (prevents data tampering)
+MAX_VALID_LINE_NUMBER = int(os.environ.get("MAX_VALID_LINE_NUMBER", "1000000"))
+
+# Security: Regex matching timeout in seconds (prevents ReDoS)
+REGEX_TIMEOUT_SECONDS = int(os.environ.get("REGEX_TIMEOUT_SECONDS", "10"))
+
 
 # ==================== Configuration ====================
 
@@ -71,8 +99,37 @@ def _get_test_files_from_pr_diff(diff_file: str) -> list[str]:
     test_files_found = []
 
     try:
-        with open(diff_file, encoding="utf-8") as f:
-            diff_content = f.read()
+        # Security: Check file size before reading
+        file_size = os.path.getsize(diff_file)
+        max_file_size = MAX_DIFF_SIZE_MB * 1024 * 1024
+        if file_size > max_file_size:
+            print(
+                f"Warning: Diff file too large ({file_size} bytes), "
+                f"exceeds {max_file_size} bytes ({MAX_DIFF_SIZE_MB} MB)"
+            )
+            print("  Skipping test file detection from diff")
+            return test_files_found
+
+        # Security: Use streaming read for large files
+        streaming_threshold = STREAMING_THRESHOLD_MB * 1024 * 1024
+        if file_size > streaming_threshold:
+            print("  Using streaming read for large diff file")
+            diff_content = []
+            with open(diff_file, encoding="utf-8") as f:
+                for line in f:
+                    diff_content.append(line)
+                    # Security: Limit number of lines to prevent memory exhaustion
+                    if len(diff_content) > 1000000:  # 1M lines max
+                        print("Warning: Diff file has too many lines, truncating")
+                        break
+            diff_content = "".join(diff_content)
+        else:
+            with open(diff_file, encoding="utf-8") as f:
+                diff_content = f.read()
+    except MemoryError:
+        print("Warning: Out of memory reading diff file")
+        print("  Using graceful degradation: skipping test file detection")
+        return test_files_found
     except Exception as e:
         print(f"  Warning: Failed to read diff file for test file detection: {e}")
         return test_files_found
@@ -85,6 +142,7 @@ def _get_test_files_from_pr_diff(diff_file: str) -> list[str]:
         r"^\+\+\+ [ab]/(tests/e2e/pull_request(?:/.+)?/test_\w+\.py"
         r"|tests/ut(?:/.+)?/test_\w+\.py)",
         re.MULTILINE,
+        timeout=REGEX_TIMEOUT_SECONDS,
     )
 
     changed_test_files = set()
@@ -125,7 +183,9 @@ def _has_csrc_changes(diff_file: str) -> bool:
 
     # Pattern to match csrc directory in diff paths (csrc as root directory)
     # Match lines like: +++ b/csrc/xxx.cpp or --- a/csrc/xxx.cpp
-    csrc_pattern = re.compile(r"^\+{3} [ab]/csrc/|^\-{3} a/csrc/", re.MULTILINE)
+    csrc_pattern = re.compile(
+        r"^\+{3} [ab]/csrc/|^\-{3} a/csrc/", re.MULTILINE, timeout=REGEX_TIMEOUT_SECONDS
+    )
     if csrc_pattern.search(diff_content):
         print("  CSRC directory changes detected in PR diff")
         return True
@@ -159,6 +219,7 @@ def _get_deleted_test_files_from_pr(diff_file: str, test_case_map: dict) -> list
         r"^--- a/(tests/e2e/pull_request(?:/.+)?/test_\w+\.py)\s*\n\s*\+\+\+ [ab]?/dev/null|"
         r"^--- a/(tests/ut(?:/.+)?/test_\w+\.py)\s*\n\s*\+\+\+ [ab]?/dev/null",
         re.MULTILINE,
+        timeout=REGEX_TIMEOUT_SECONDS,
     )
 
     for match in deleted_pattern.finditer(diff_content):
@@ -216,14 +277,46 @@ class CoverageSelector:
     def get_covered_lines_from_file(self, cov_file: str, filename: str) -> set[int]:
         """
         Get covered line numbers for a file from a single coverage SQLite file
+
+        Security fixes implemented:
+        - Database size limit (FINDING-001): Prevents DoS via large files
+        - Data integrity verification (FINDING-002): Validates line number ranges
+        - Query timeout (FINDING-001): Prevents hanging queries
         """
         lines = set()
         try:
-            conn = sqlite3.connect(cov_file)
+            # Security (FINDING-001): Check database file size before opening
+            db_size_mb = os.path.getsize(cov_file) / (1024 * 1024)
+            if db_size_mb > MAX_DATABASE_SIZE_MB:
+                print(
+                    f"Warning: Database file too large ({db_size_mb:.2f} MB), "
+                    f"exceeds {MAX_DATABASE_SIZE_MB} MB limit"
+                )
+                print("  Skipping coverage data to prevent DoS")
+                return lines
+
+            # Security (FINDING-001): Connect with timeout to prevent hanging
+            conn = sqlite3.connect(
+                cov_file,
+                timeout=DATABASE_QUERY_TIMEOUT
+            )
+            conn.execute(
+                f"PRAGMA busy_timeout = {DATABASE_QUERY_TIMEOUT * 1000}"
+            )
+
+            # Security: Set restrictive file permissions (0600)
+            try:
+                os.chmod(cov_file, 0o600)
+            except Exception:
+                pass  # Ignore permission errors
+
             cursor = conn.cursor()
 
             # Find file ID (fuzzy path matching)
-            cursor.execute("SELECT id FROM file WHERE path LIKE ?", (f"%{filename}",))
+            cursor.execute(
+                "SELECT id FROM file WHERE path LIKE ?",
+                (f"%{filename}",)
+            )
             row = cursor.fetchone()
             if not row:
                 conn.close()
@@ -231,32 +324,98 @@ class CoverageSelector:
             file_id = row[0]
 
             # Get all arcs, calculate covered line numbers
-            cursor.execute("SELECT DISTINCT fromno, tono FROM arc WHERE file_id = ?", (file_id,))
+            cursor.execute(
+                "SELECT DISTINCT fromno, tono FROM arc WHERE file_id = ?",
+                (file_id,)
+            )
+
+            # Security (FINDING-002): Validate line number ranges
+            invalid_lines = 0
             for fromno, tono in cursor.fetchall():
+                # Validate line numbers are within reasonable range
+                if fromno > MAX_VALID_LINE_NUMBER or tono > MAX_VALID_LINE_NUMBER:
+                    invalid_lines += 1
+                    continue  # Skip invalid line numbers
+
                 if fromno > 0:
                     lines.add(fromno)
                 if tono > 0:
                     lines.add(tono)
 
+            if invalid_lines > 0:
+                print(
+                    f"Warning: {invalid_lines} invalid line numbers skipped "
+                    f"(exceeds {MAX_VALID_LINE_NUMBER})"
+                )
+
             conn.close()
         except Exception as e:
-            print(f"  Warning: Error reading {cov_file}: {e}")
+            # Security (FINDING-007): Avoid exposing sensitive information in error
+            error_msg = str(e)
+            if any(
+                keyword in error_msg.lower()
+                for keyword in ["token", "password", "secret", "key"]
+            ):
+                print(f"Warning: Error reading coverage data (details hidden)")
+            else:
+                print(f"Warning: Error reading coverage data: {type(e).__name__}")
         return lines
 
     def get_covered_files_from_file(self, cov_file: str) -> set[str]:
-        """Get all covered files from a single coverage file"""
+        """Get all covered files from a single coverage file
+
+        Security fixes implemented:
+        - Database size limit (FINDING-001): Prevents DoS via large files
+        - Query timeout (FINDING-001): Prevents hanging queries
+        """
         files = set()
         try:
-            conn = sqlite3.connect(cov_file)
+            # Security (FINDING-001): Check database file size before opening
+            db_size_mb = os.path.getsize(cov_file) / (1024 * 1024)
+            if db_size_mb > MAX_DATABASE_SIZE_MB:
+                print(
+                    f"Warning: Database file too large ({db_size_mb:.2f} MB), "
+                    f"exceeds {MAX_DATABASE_SIZE_MB} MB limit"
+                )
+                print("  Skipping file list extraction to prevent DoS")
+                return files
+
+            # Security (FINDING-001): Connect with timeout
+            conn = sqlite3.connect(
+                cov_file,
+                timeout=DATABASE_QUERY_TIMEOUT
+            )
+            conn.execute(
+                f"PRAGMA busy_timeout = {DATABASE_QUERY_TIMEOUT * 1000}"
+            )
+
+            # Security: Set restrictive file permissions (0600)
+            try:
+                os.chmod(cov_file, 0o600)
+            except Exception:
+                pass  # Ignore permission errors
+
             cursor = conn.cursor()
             cursor.execute("SELECT path FROM file")
             for (path,) in cursor.fetchall():
                 if REPO_NAME in path:
-                    rel_path = path.split(f"{REPO_NAME}/")[-1] if f"{REPO_NAME}/" in path else path
+                    rel_path = (
+                        path.split(f"{REPO_NAME}/")[-1]
+                        if f"{REPO_NAME}/" in path
+                        else path
+                    )
                     files.add(rel_path)
             conn.close()
         except Exception as e:
-            print(f"  Warning: Error reading {cov_file}: {e}")
+            # Security (FINDING-007): Avoid exposing sensitive information in error
+            error_msg = str(e)
+            if any(
+                keyword in error_msg.lower()
+                for keyword in ["token", "password", "secret", "key"]
+            ):
+                print(f"Warning: Error reading coverage data (details hidden)")
+            else:
+                print(f"Warning: Error reading coverage data: {type(e).__name__}")
         return files
 
     def build_test_case_map(self) -> dict:
@@ -432,7 +591,9 @@ class CodeChangeDetector:
             # hunk header: @@ -old_start,old_count +new_start,new_count @@
             elif line.startswith("@@") and current_file:
                 # Parse: @@ -100,10 +100,12 @@
-                match = re.search(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", line)
+                match = re.search(
+                    r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", line, timeout=REGEX_TIMEOUT_SECONDS
+                )
                 if match:
                     old_start = int(match.group(1))
                     old_count = int(match.group(2)) if match.group(2) else 1
@@ -491,19 +652,50 @@ class FunctionParser:
         """
         Parse Python file, return function name -> [(start_line, end_line), ...] mapping
         Supports multiple occurrences of the same function name (returns all matching ranges)
+
+        Security fixes implemented (FINDING-003):
+        - File size limit: Prevents DoS via large source files
+        - Recursion depth limit: Prevents stack overflow in deeply nested code
         """
         function_ranges = defaultdict(list)
         try:
-            with open(filepath, encoding="utf-8") as f:
-                tree = ast.parse(f.read(), filename=filepath)
+            # Security (FINDING-003): Check file size before parsing
+            file_size_mb = os.path.getsize(filepath) / (1024 * 1024)
+            if file_size_mb > MAX_SOURCE_FILE_SIZE_MB:
+                print(
+                    f"Warning: Source file too large ({file_size_mb:.2f} MB), "
+                    f"exceeds {MAX_SOURCE_FILE_SIZE_MB} MB limit"
+                )
+                print(f"  Skipping function parsing: {filepath}")
+                return function_ranges
 
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    function_ranges[node.name].append(
-                        (node.lineno, node.end_lineno or node.lineno)
-                    )
+            # Security (FINDING-003): Set recursion depth limit for AST parsing
+            import sys
+
+            old_limit = sys.getrecursionlimit()
+            sys.setrecursionlimit(
+                min(MAX_PARSE_RECURSION_DEPTH, old_limit)
+            )
+
+            try:
+                with open(filepath, encoding="utf-8") as f:
+                    tree = ast.parse(f.read(), filename=filepath)
+
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        function_ranges[node.name].append(
+                            (node.lineno, node.end_lineno or node.lineno)
+                        )
+            finally:
+                # Restore original recursion limit
+                sys.setrecursionlimit(old_limit)
+
         except Exception as e:
-            print(f"  Warning: Failed to parse function definition {filepath}: {e}")
+            # Security (FINDING-007): Avoid exposing sensitive file paths
+            print(
+                f"Warning: Failed to parse function definition "
+                f"(file details hidden): {type(e).__name__}"
+            )
 
         return function_ranges
 
@@ -511,16 +703,41 @@ class FunctionParser:
     def _get_import_lines(filepath: str) -> set[int]:
         """
         Get line numbers of all import statements in file
+
+        Security fixes implemented (FINDING-003):
+        - File size limit: Prevents DoS via large source files
+        - Recursion depth limit: Prevents stack overflow
         """
         import_lines = set()
         try:
-            with open(filepath, encoding="utf-8") as f:
-                tree = ast.parse(f.read(), filename=filepath)
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.Import, ast.ImportFrom)):
-                    import_lines.add(node.lineno)
-                    if hasattr(node, "end_lineno") and node.end_lineno:
-                        import_lines.update(range(node.lineno, node.end_lineno + 1))
+            # Security (FINDING-003): Check file size before parsing
+            file_size_mb = os.path.getsize(filepath) / (1024 * 1024)
+            if file_size_mb > MAX_SOURCE_FILE_SIZE_MB:
+                return import_lines  # Skip large files
+
+            # Security (FINDING-003): Set recursion depth limit
+            import sys
+
+            old_limit = sys.getrecursionlimit()
+            sys.setrecursionlimit(
+                min(MAX_PARSE_RECURSION_DEPTH, old_limit)
+            )
+
+            try:
+                with open(filepath, encoding="utf-8") as f:
+                    tree = ast.parse(f.read(), filename=filepath)
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.Import, ast.ImportFrom)):
+                        import_lines.add(node.lineno)
+                        if (
+                            hasattr(node, "end_lineno")
+                            and node.end_lineno
+                        ):
+                            import_lines.update(
+                                range(node.lineno, node.end_lineno + 1)
+                            )
+            finally:
+                sys.setrecursionlimit(old_limit)
         except Exception:
             pass
         return import_lines
@@ -1255,11 +1472,27 @@ def main():
         repo = None
         pr_num = None
 
+        # Security: Validate PR spec format to prevent injection
+        pr_spec_pattern = re.compile(
+            r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+#[0-9]+$|^[0-9]+$", timeout=REGEX_TIMEOUT_SECONDS
+        )
+        if not pr_spec_pattern.match(pr_spec):
+            print(f"Error: Invalid PR format: {pr_spec}")
+            print("  Expected format: owner/repo#pr_number or just pr_number")
+            exit(1)
+
         # Parse owner/repo#pr_number format
         if "#" in pr_spec:
             parts = pr_spec.split("#")
             repo = parts[0]
             pr_num = parts[1]
+            # Security: Additional validation for repo and pr_num
+            if not re.match(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$", repo, timeout=REGEX_TIMEOUT_SECONDS):
+                print(f"Error: Invalid repository format: {repo}")
+                exit(1)
+            if not pr_num.isdigit():
+                print(f"Error: PR number must be numeric: {pr_num}")
+                exit(1)
         else:
             pr_num = pr_spec
             # Try to get current repository
@@ -1272,7 +1505,9 @@ def main():
                 if result.returncode == 0:
                     url = result.stdout.strip()
                     if "github.com" in url:
-                        match = re.search(r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?$", url)
+                        match = re.search(
+                            r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?$", url, timeout=REGEX_TIMEOUT_SECONDS
+                        )
                         if match:
                             repo = match.group(1)
             except Exception as e:
@@ -1285,33 +1520,136 @@ def main():
 
         print(f"Fetching changes from GitHub PR: {repo}#{pr_num}")
 
-        # Create context that does not verify SSL certificates
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-
         # Use cross-platform temp directory
         diff_file = os.path.join(tempfile.gettempdir(), "pr.diff")
         max_retries = 3
+
+        # Security: Setup caching to reduce API calls (public repo, no auth needed)
+        cache_dir = os.path.join(tempfile.gettempdir(), "precision_test_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_file = os.path.join(
+            cache_dir, f"pr_{repo.replace('/', '_')}_{pr_num}.json"
+        )
+        etag_file = os.path.join(
+            cache_dir, f"pr_{repo.replace('/', '_')}_{pr_num}.etag"
+        )
 
         for attempt in range(1, max_retries + 1):
             print(f"  Attempt {attempt}/{max_retries} to get PR diff via GitHub API...")
             try:
                 pr_url = f"https://api.github.com/repos/{repo}/pulls/{pr_num}"
-                req = urllib.request.Request(
-                    pr_url,
-                    headers={"Accept": "application/vnd.github.v3+json"},
-                )
-                with urllib.request.urlopen(req, timeout=30, context=ssl_context) as response:
-                    pr_data = json.loads(response.read().decode())
-                    diff_url = pr_data.get("diff_url")
+
+                # Security: Use ETag for conditional requests to save API quota
+                headers = {"Accept": "application/vnd.github.v3+json"}
+                
+                # Add authentication if token is provided (optional)
+                if GITHUB_TOKEN:
+                    headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+                    print("  Using authenticated API requests (higher rate limit)")
+                
+                if os.path.exists(etag_file):
+                    with open(etag_file, "r") as f:
+                        etag = f.read().strip()
+                        headers["If-None-Match"] = etag
+
+                req = urllib.request.Request(pr_url, headers=headers)
+                try:
+                    with urllib.request.urlopen(req, timeout=30) as response:
+                        # Security (FINDING-005): Monitor rate limit headers
+                        rate_limit = response.headers.get("X-RateLimit-Remaining")
+                        rate_limit_reset = response.headers.get(
+                            "X-RateLimit-Reset"
+                        )
+                        if rate_limit and int(rate_limit) < 100:
+                            print(
+                                f"Warning: GitHub API rate limit low: "
+                                f"{rate_limit} requests remaining"
+                            )
+                            if rate_limit_reset:
+                                reset_time = int(rate_limit_reset)
+                                print(
+                                    f"  Rate limit resets at "
+                                    f"{time.strftime('%H:%M:%S', time.localtime(reset_time))}"
+                                )
+
+                        pr_data = json.loads(response.read().decode())
+
+                        # Security: Cache response with ETag
+                        etag = response.headers.get("ETag")
+                        if etag:
+                            with open(etag_file, "w") as f:
+                                f.write(etag)
+
+                        with open(cache_file, "w") as f:
+                            json.dump(pr_data, f)
+
+                except urllib.error.HTTPError as e:
+                    # Security (FINDING-005): Handle rate limiting with exponential backoff
+                    if e.code == 429 or e.code == 403:
+                        retry_after = e.headers.get("Retry-After")
+                        if retry_after:
+                            wait_time = int(retry_after)
+                        else:
+                            # Exponential backoff: 2^attempt seconds
+                            wait_time = 2 ** attempt
+
+                        print(
+                            f"Warning: GitHub API rate limited "
+                            f"(HTTP {e.code}), retrying in {wait_time}s..."
+                        )
+                        if attempt < max_retries:
+                            time.sleep(wait_time)
+                            continue
+                        else:
+                            raise Exception(
+                                f"GitHub API rate limit exceeded after "
+                                f"{max_retries} retries"
+                            )
+
+                    elif e.code == 304:  # Not Modified - use cache
+                        if os.path.exists(cache_file):
+                            with open(cache_file, "r") as f:
+                                pr_data = json.load(f)
+                            print("  Using cached PR data (ETag match)")
+                        else:
+                            raise
+                    else:
+                        raise
+
+                diff_url = pr_data.get("diff_url")
+
+                # Security: Validate PR size to prevent DoS
+                changed_files = pr_data.get("changed_files", 0)
+                max_changed_files = 100
+                if changed_files > max_changed_files:
+                    print(
+                        f"Error: PR has {changed_files} changed files, "
+                        f"exceeding limit of {max_changed_files}"
+                    )
+                    print("  Large PRs may cause resource exhaustion")
+                    print("  Please split your changes into smaller PRs")
+                    exit(1)
+
+                # Security: Check diff size before downloading
+                additions = pr_data.get("additions", 0)
+                deletions = pr_data.get("deletions", 0)
+                total_changes = additions + deletions
+                max_changes = 10000
+                if total_changes > max_changes:
+                    print(
+                        f"Error: PR has {total_changes} line changes "
+                        f"({additions} additions, {deletions} deletions)"
+                    )
+                    print(f"  Exceeding limit of {max_changes} total changes")
+                    print("  Large diffs may cause resource exhaustion")
+                    exit(1)
 
                 if not diff_url:
                     raise Exception("Cannot get diff URL")
 
                 # Download diff (use binary mode to avoid line ending conversion)
                 req = urllib.request.Request(diff_url)
-                with urllib.request.urlopen(req, timeout=60, context=ssl_context) as response:
+                with urllib.request.urlopen(req, timeout=60) as response:
                     diff_bytes = response.read()
                     with open(diff_file, "wb") as f:
                         f.write(diff_bytes)

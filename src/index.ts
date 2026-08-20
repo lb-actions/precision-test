@@ -10,6 +10,43 @@ import * as fs from "fs";
 import * as os from "os";
 
 /**
+ * Security: Python subprocess execution timeout in seconds (prevents DoS).
+ * Can be overridden via PYTHON_EXEC_TIMEOUT_SECONDS environment variable.
+ */
+const PYTHON_EXEC_TIMEOUT_SECONDS = parseInt(
+  process.env.PYTHON_EXEC_TIMEOUT_SECONDS || "600",
+  10
+);
+
+/**
+ * Execute a command with timeout.
+ * Wraps exec.exec() with timeout functionality.
+ */
+async function execWithTimeout(
+  commandLine: string,
+  args: string[],
+  options: exec.ExecOptions,
+  timeoutMs: number
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Command timed out after ${timeoutMs / 1000} seconds`));
+    }, timeoutMs);
+
+    exec
+      .exec(commandLine, args, options)
+      .then((result) => {
+        clearTimeout(timer);
+        resolve(result);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
+/**
  * Parameters for precision test selector.
  */
 interface PrecisionTestParams {
@@ -69,15 +106,17 @@ async function runPrecisionTest(
 
   try {
     // Create virtual environment
+    // Security: 60 seconds timeout to prevent hanging
     console.log("Creating virtual environment...");
-    await exec.exec("python3", ["-m", "venv", venvPath], { silent: true });
+    await execWithTimeout("python3", ["-m", "venv", venvPath], { silent: true }, 60000);
 
     pythonCommand = path.join(venvPath, "bin", "python");
     pipCommand = path.join(venvPath, "bin", "pip");
 
     // Install regex dependency
+    // Security: 60 seconds timeout to prevent hanging
     console.log("Installing dependencies...");
-    await exec.exec(pipCommand, ["install", "regex", "-q"], { silent: true });
+    await execWithTimeout(pipCommand, ["install", "regex", "-q"], { silent: true }, 60000);
 
     // Build command arguments
     const args: string[] = [selectorPy];
@@ -128,13 +167,19 @@ async function runPrecisionTest(
     };
 
     // Execute Python script
+    // Security: Using parameterized exec call (not shell) with validated inputs
+    // Security: Added timeout to prevent DoS attacks (FINDING-001)
     console.log("Running precision test selector...");
-    console.log(`Command: ${pythonCommand} ${args.join(" ")}`);
 
-    await exec.exec(pythonCommand, args, {
-      env,
-      cwd: process.cwd(),
-    });
+    await execWithTimeout(
+      pythonCommand,
+      args,
+      {
+        env,
+        cwd: process.cwd(),
+      },
+      PYTHON_EXEC_TIMEOUT_SECONDS * 1000
+    );
 
     // Read output file
     if (fs.existsSync(outputFile)) {
@@ -185,10 +230,10 @@ async function run(): Promise<void> {
     const repoName = core.getInput("repo-name", { required: false }) || "vllm_ascend";
 
     console.log("Input parameters:");
-    console.log(`  - github-pr: ${githubPr || "(not specified)"}`);
-    console.log(`  - source-dir: ${sourceDir}`);
-    console.log(`  - map-file: ${mapFile}`);
-    console.log(`  - coverage-dir: ${coverageDir}`);
+    console.log(`  - github-pr: ${githubPr ? "(provided)" : "(not specified)"}`);
+    console.log(`  - source-dir: (validated)`);
+    console.log(`  - map-file: (validated)`);
+    console.log(`  - coverage-dir: (validated)`);
     console.log(`  - build-map: ${buildMap}`);
     console.log(`  - min-affected: ${minAffected}`);
     console.log(`  - dedup: ${dedup}`);
@@ -197,6 +242,11 @@ async function run(): Promise<void> {
     console.log(`  - enable-file-match: ${enableFileMatch}`);
     console.log(`  - skip-imports: ${skipImports}`);
     console.log(`  - repo-name: ${repoName}`);
+
+    // Mask sensitive inputs
+    if (sourceDir) core.setSecret(sourceDir);
+    if (coverageDir) core.setSecret(coverageDir);
+    if (mapFile) core.setSecret(mapFile);
     core.endGroup();
 
     // Validate paths

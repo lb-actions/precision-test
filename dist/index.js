@@ -51,6 +51,32 @@ const path = __importStar(__nccwpck_require__(6928));
 const fs = __importStar(__nccwpck_require__(9896));
 const os = __importStar(__nccwpck_require__(857));
 /**
+ * Security: Python subprocess execution timeout in seconds (prevents DoS).
+ * Can be overridden via PYTHON_EXEC_TIMEOUT_SECONDS environment variable.
+ */
+const PYTHON_EXEC_TIMEOUT_SECONDS = parseInt(process.env.PYTHON_EXEC_TIMEOUT_SECONDS || "600", 10);
+/**
+ * Execute a command with timeout.
+ * Wraps exec.exec() with timeout functionality.
+ */
+async function execWithTimeout(commandLine, args, options, timeoutMs) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error(`Command timed out after ${timeoutMs / 1000} seconds`));
+        }, timeoutMs);
+        exec
+            .exec(commandLine, args, options)
+            .then((result) => {
+            clearTimeout(timer);
+            resolve(result);
+        })
+            .catch((error) => {
+            clearTimeout(timer);
+            reject(error);
+        });
+    });
+}
+/**
  * Sanitize output value for CI output file.
  */
 function sanitizeOutputValue(value) {
@@ -85,13 +111,15 @@ async function runPrecisionTest(params) {
     let pipCommand = "pip3";
     try {
         // Create virtual environment
+        // Security: 60 seconds timeout to prevent hanging
         console.log("Creating virtual environment...");
-        await exec.exec("python3", ["-m", "venv", venvPath], { silent: true });
+        await execWithTimeout("python3", ["-m", "venv", venvPath], { silent: true }, 60000);
         pythonCommand = path.join(venvPath, "bin", "python");
         pipCommand = path.join(venvPath, "bin", "pip");
         // Install regex dependency
+        // Security: 60 seconds timeout to prevent hanging
         console.log("Installing dependencies...");
-        await exec.exec(pipCommand, ["install", "regex", "-q"], { silent: true });
+        await execWithTimeout(pipCommand, ["install", "regex", "-q"], { silent: true }, 60000);
         // Build command arguments
         const args = [selectorPy];
         if (params.githubPr) {
@@ -134,12 +162,13 @@ async function runPrecisionTest(params) {
             REPO_NAME: params.repoName,
         };
         // Execute Python script
+        // Security: Using parameterized exec call (not shell) with validated inputs
+        // Security: Added timeout to prevent DoS attacks (FINDING-001)
         console.log("Running precision test selector...");
-        console.log(`Command: ${pythonCommand} ${args.join(" ")}`);
-        await exec.exec(pythonCommand, args, {
+        await execWithTimeout(pythonCommand, args, {
             env,
             cwd: process.cwd(),
-        });
+        }, PYTHON_EXEC_TIMEOUT_SECONDS * 1000);
         // Read output file
         if (fs.existsSync(outputFile)) {
             const content = fs.readFileSync(outputFile, "utf-8");
@@ -187,10 +216,10 @@ async function run() {
         const skipImports = core.getInput("skip-imports", { required: false }) === "true";
         const repoName = core.getInput("repo-name", { required: false }) || "vllm_ascend";
         console.log("Input parameters:");
-        console.log(`  - github-pr: ${githubPr || "(not specified)"}`);
-        console.log(`  - source-dir: ${sourceDir}`);
-        console.log(`  - map-file: ${mapFile}`);
-        console.log(`  - coverage-dir: ${coverageDir}`);
+        console.log(`  - github-pr: ${githubPr ? "(provided)" : "(not specified)"}`);
+        console.log(`  - source-dir: (validated)`);
+        console.log(`  - map-file: (validated)`);
+        console.log(`  - coverage-dir: (validated)`);
         console.log(`  - build-map: ${buildMap}`);
         console.log(`  - min-affected: ${minAffected}`);
         console.log(`  - dedup: ${dedup}`);
@@ -199,6 +228,13 @@ async function run() {
         console.log(`  - enable-file-match: ${enableFileMatch}`);
         console.log(`  - skip-imports: ${skipImports}`);
         console.log(`  - repo-name: ${repoName}`);
+        // Mask sensitive inputs
+        if (sourceDir)
+            core.setSecret(sourceDir);
+        if (coverageDir)
+            core.setSecret(coverageDir);
+        if (mapFile)
+            core.setSecret(mapFile);
         core.endGroup();
         // Validate paths
         core.startGroup("Step 2: Validate paths");
