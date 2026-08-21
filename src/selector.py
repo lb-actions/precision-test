@@ -142,7 +142,6 @@ def _get_test_files_from_pr_diff(diff_file: str) -> list[str]:
         r"^\+\+\+ [ab]/(tests/e2e/pull_request(?:/.+)?/test_\w+\.py"
         r"|tests/ut(?:/.+)?/test_\w+\.py)",
         re.MULTILINE,
-        timeout=REGEX_TIMEOUT_SECONDS,
     )
 
     changed_test_files = set()
@@ -184,7 +183,7 @@ def _has_csrc_changes(diff_file: str) -> bool:
     # Pattern to match csrc directory in diff paths (csrc as root directory)
     # Match lines like: +++ b/csrc/xxx.cpp or --- a/csrc/xxx.cpp
     csrc_pattern = re.compile(
-        r"^\+{3} [ab]/csrc/|^\-{3} a/csrc/", re.MULTILINE, timeout=REGEX_TIMEOUT_SECONDS
+        r"^\+{3} [ab]/csrc/|^\-{3} a/csrc/", re.MULTILINE
     )
     if csrc_pattern.search(diff_content):
         print("  CSRC directory changes detected in PR diff")
@@ -219,7 +218,6 @@ def _get_deleted_test_files_from_pr(diff_file: str, test_case_map: dict) -> list
         r"^--- a/(tests/e2e/pull_request(?:/.+)?/test_\w+\.py)\s*\n\s*\+\+\+ [ab]?/dev/null|"
         r"^--- a/(tests/ut(?:/.+)?/test_\w+\.py)\s*\n\s*\+\+\+ [ab]?/dev/null",
         re.MULTILINE,
-        timeout=REGEX_TIMEOUT_SECONDS,
     )
 
     for match in deleted_pattern.finditer(diff_content):
@@ -592,7 +590,7 @@ class CodeChangeDetector:
             elif line.startswith("@@") and current_file:
                 # Parse: @@ -100,10 +100,12 @@
                 match = re.search(
-                    r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", line, timeout=REGEX_TIMEOUT_SECONDS
+                    r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", line
                 )
                 if match:
                     old_start = int(match.group(1))
@@ -1474,7 +1472,7 @@ def main():
 
         # Security: Validate PR spec format to prevent injection
         pr_spec_pattern = re.compile(
-            r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+#[0-9]+$|^[0-9]+$", timeout=REGEX_TIMEOUT_SECONDS
+            r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+#[0-9]+$|^[0-9]+$"
         )
         if not pr_spec_pattern.match(pr_spec):
             print(f"Error: Invalid PR format: {pr_spec}")
@@ -1487,7 +1485,7 @@ def main():
             repo = parts[0]
             pr_num = parts[1]
             # Security: Additional validation for repo and pr_num
-            if not re.match(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$", repo, timeout=REGEX_TIMEOUT_SECONDS):
+            if not re.match(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$", repo):
                 print(f"Error: Invalid repository format: {repo}")
                 exit(1)
             if not pr_num.isdigit():
@@ -1506,7 +1504,7 @@ def main():
                     url = result.stdout.strip()
                     if "github.com" in url:
                         match = re.search(
-                            r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?$", url, timeout=REGEX_TIMEOUT_SECONDS
+                            r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?$", url
                         )
                         if match:
                             repo = match.group(1)
