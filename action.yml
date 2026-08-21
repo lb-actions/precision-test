@@ -51,12 +51,6 @@ inputs:
     required: false
     default: 'vllm_ascend'
 
-outputs:
-  test-list-file:
-    description: 'Path to the file containing recommended test cases'
-  test-count:
-    description: 'Number of test cases recommended'
-
 runs:
   using: 'node20'
   main: 'dist/index.js'

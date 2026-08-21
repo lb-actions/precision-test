@@ -35,7 +35,7 @@ jobs:
 
       - name: Precision Test Selector
         id: selector
-        uses: lb-actions/precision-test@v1
+        uses: lb-actions/precision-test@v1.0.0
         with:
           github-pr: ${{ github.repository }}#${{ github.event.pull_request.number }}
           source-dir: src
@@ -53,7 +53,7 @@ jobs:
 
 ```yaml
 - name: Precision Test Selector
-  uses: lb-actions/precision-test@v1
+  uses: lb-actions/precision-test@v1.0.0
   with:
     github-pr: ${{ github.repository }}#${{ github.event.pull_request.number }}
     map-file: test_case_map.json
@@ -117,7 +117,7 @@ All security limits are configurable via environment variables:
 
 ```yaml
 - name: Precision Test Selector
-  uses: lb-actions/precision-test@v1
+  uses: lb-actions/precision-test@v1.0.0
   env:
     MAX_DATABASE_SIZE_MB: 200
     DATABASE_QUERY_TIMEOUT: 120

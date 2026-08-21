@@ -260,23 +260,12 @@ async function run() {
             repoName,
         });
         core.endGroup();
-        // Set outputs
-        core.startGroup("Step 4: Set outputs");
-        core.setOutput("test-list-file", result.testListFile);
-        core.setOutput("test-count", result.testCount.toString());
-        console.log(`Output: test-list-file=${result.testListFile}`);
-        console.log(`Output: test-count=${result.testCount}`);
-        // Write to ATOMGIT_OUTPUT for GitHub compatibility
-        const atomgitOutputPath = process.env.ATOMGIT_OUTPUT;
-        if (atomgitOutputPath) {
-            const sanitizedFile = sanitizeOutputValue(result.testListFile);
-            const sanitizedCount = sanitizeOutputValue(result.testCount.toString());
-            const outputContent = `test-list-file=${sanitizedFile}\ntest-count=${sanitizedCount}\n`;
-            fs.appendFileSync(atomgitOutputPath, outputContent);
-        }
+        // Print test list file
+        core.startGroup("Step 4: Test list file");
+        console.log(`test-list-file=${result.testListFile}`);
         core.endGroup();
         console.log("=".repeat(60));
-        console.log(`Precision test selection completed. Found ${result.testCount} tests.`);
+        console.log("Precision test selection completed.");
         console.log("=".repeat(60));
     }
     catch (error) {
