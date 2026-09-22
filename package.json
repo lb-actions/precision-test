@@ -4,9 +4,9 @@
   "description": "GitHub Actions plugin for precision test selection based on coverage data",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc && ncc build dist/index.js --license licenses.txt && cp src/selector.py dist/",
+    "build": "tsc && ncc build dist/index.js --license licenses.txt && rm -rf dist/test_selector && mkdir -p dist/test_selector && cp src/*.py dist/test_selector/ && cp -r src/repos dist/test_selector/",
     "compile": "tsc",
-    "package": "npm run build && zip -r precision-test-v$(node -p \"require('./package.json').version\").zip dist/ action.yml precision_test/"
+    "package": "npm run build && zip -r precision-test-v$(node -p \"require('./package.json').version\").zip dist/ action.yml"
   },
   "keywords": [
     "github",

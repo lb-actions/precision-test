@@ -1,0 +1,43 @@
+# Pre-commit configuration for test-action
+# Documentation: https://pre-commit.com/
+exclude: dist/.*|build/|target/|node_modules/
+
+repos:
+  # ===================== 通用 hooks ======================
+  # 禁止提交大文件
+  - repo: https://gitcode.com/gh_mirrors/pr/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-yaml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: no-commit-to-branch
+        args: ["--branch", "master", "--branch", "main"]
+      - id: trailing-whitespace
+
+  # ===================== JS/TS 语言 ======================
+  # Prettier 代码格式化
+  - repo: local
+    hooks:
+      - id: prettier
+        name: Prettier Format
+        language: system
+        entry: npm run format
+        pass_filenames: false
+        files: \.(js|ts|vue|jsx|tsx)$
+  # ESLint 代码规范检查 + 自动修复
+  - repo: local
+    hooks:
+      - id: eslint
+        name: ESLint Check
+        language: system
+        entry: npm run lint:fix
+        pass_filenames: false
+        files: \.(js|ts|vue|jsx|tsx)$
