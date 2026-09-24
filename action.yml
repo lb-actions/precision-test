@@ -3,8 +3,15 @@ description: 'Coverage-based precision test selector with line, function, and fi
 author: 'openlibing'
 
 inputs:
+  repo:
+    description: 'Repository adapter: vllm_ascend / sglang / torch_npu (default: vllm_ascend)'
+    required: false
+    default: 'vllm_ascend'
   github-pr:
-    description: 'GitHub PR, format: owner/repo#pr_number'
+    description: 'GitHub PR, format: owner/repo#pr_number (for vllm_ascend / sglang)'
+    required: false
+  gitcode-pr:
+    description: 'GitCode PR, format: owner/repo#pr_number (for torch_npu); mutually exclusive with github-pr'
     required: false
   source-dir:
     description: 'Source code directory (default: covstub)'
@@ -15,7 +22,7 @@ inputs:
     required: false
     default: 'test_case_map.json'
   coverage-dir:
-    description: 'Coverage data directory (default: ./coverage)'
+    description: 'Coverage data directory, required only when building the map (default: coverage)'
     required: false
     default: 'coverage'
   build-map:
@@ -38,18 +45,10 @@ inputs:
     description: 'Enable function-level matching'
     required: false
     default: 'true'
-  enable-file-match:
-    description: 'Enable file-level matching'
-    required: false
-    default: 'true'
   skip-imports:
     description: 'Skip import statement lines (only effective for function-level matching)'
     required: false
     default: 'false'
-  repo-name:
-    description: 'Repository name for path normalization (e.g., vllm_ascend)'
-    required: false
-    default: 'vllm_ascend'
 
 runs:
   using: 'node20'

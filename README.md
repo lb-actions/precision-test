@@ -1,17 +1,20 @@
 # precision-test
 
 Coverage-based precision test selector for GitHub Actions. Analyzes code changes
-and selects relevant test cases based on coverage data with line, function, and
-file granularity.
+and selects relevant test cases based on coverage data with line and function
+granularity (file-level matching is reserved for renamed/deleted product code).
 
 ## Features
 
-- **Multi-granularity matching**: Line-level, function-level, and file-level
-  test selection
+- **Multi-granularity matching**: Line-level and function-level test selection,
+  with file-level matching applied internally to renamed/deleted product code
 - **Coverage-based selection**: Uses coverage data to identify affected test cases
-- **GitHub PR integration**: Automatically fetches PR diff from GitHub API
-- **Security hardening**: Comprehensive DoS protection and input validation
-- **Configurable**: All limits and thresholds configurable via environment variables
+- **Multi-repo adapters**: Built-in adapters for `vllm_ascend`, `sglang`, and
+  `torch_npu`, selected via the `repo` input
+- **PR integration**: Fetches PR diff from GitHub API (`vllm_ascend` / `sglang`)
+  or GitCode API (`torch_npu`)
+- **Security hardening**: Path traversal validation and subprocess execution
+  timeout
 
 ## Usage
 
@@ -55,76 +58,92 @@ jobs:
 - name: Precision Test Selector
   uses: lb-actions/precision-test@v1.0.0
   with:
+    repo: vllm_ascend
     github-pr: ${{ github.repository }}#${{ github.event.pull_request.number }}
     map-file: test_case_map.json
     build-map: 'true'
+```
+
+### GitCode PR (torch_npu)
+
+```yaml
+- name: Precision Test Selector
+  uses: lb-actions/precision-test@v1.0.0
+  with:
+    repo: torch_npu
+    gitcode-pr: Ascend/pytorch#${{ github.event.pull_request.number }}
+    source-dir: covstub
 ```
 
 ## Inputs
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `github-pr` | GitHub PR, format: `owner/repo#pr_number` or just `pr_number` | No | - |
+| `repo` | Repository adapter: `vllm_ascend` / `sglang` / `torch_npu` | No | `vllm_ascend` |
+| `github-pr` | GitHub PR (vllm_ascend / sglang), format: `owner/repo#pr_number` or just `pr_number` | No | - |
+| `gitcode-pr` | GitCode PR (torch_npu), format: `owner/repo#pr_number`; mutually exclusive with `github-pr` | No | - |
 | `source-dir` | Source code directory | No | `covstub` |
 | `map-file` | Test case map file | No | `test_case_map.json` |
-| `coverage-dir` | Coverage data directory | No | `coverage` |
+| `coverage-dir` | Coverage data directory (required only when building the map) | No | `coverage` |
 | `build-map` | Rebuild test case mapping | No | `false` |
 | `min-affected` | Minimum affected lines threshold | No | `1` |
 | `dedup` | Enable deduplication | No | `false` |
 | `enable-line-match` | Enable line-level matching | No | `true` |
 | `enable-function-match` | Enable function-level matching | No | `true` |
-| `enable-file-match` | Enable file-level matching | No | `true` |
 | `skip-imports` | Skip import statement lines | No | `false` |
-| `repo-name` | Repository name for path normalization | No | `vllm_ascend` |
+
+> File-level matching is reserved for renamed/deleted product code files and is
+> not exposed as an input; it runs automatically when such changes are detected.
 
 ## Outputs
 
-| Output | Description |
-|--------|-------------|
-| `test-list-file` | Path to the file containing recommended test cases |
-| `test-count` | Number of test cases recommended |
+The action writes the recommended test list to `recommended_pytest_paths.txt`
+in the workflow workspace and prints `test-list-file=<path>` and
+`test-count=<n>` to the log. No outputs are declared in `action.yml`; read the
+file directly in a subsequent step:
 
-## Security Configuration
+```yaml
+- name: Run Selected Tests
+  run: |
+    if [ -f recommended_pytest_paths.txt ]; then
+      pytest -n auto $(cat recommended_pytest_paths.txt)
+    fi
+```
 
-All security limits are configurable via environment variables:
+## Environment Variables
 
-### DoS Protection
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MAX_DATABASE_SIZE_MB` | `100` | Maximum coverage database size in MB |
-| `DATABASE_QUERY_TIMEOUT` | `60` | Database query timeout in seconds |
-| `MAX_SOURCE_FILE_SIZE_MB` | `1` | Maximum source file size for parsing in MB |
-| `MAX_PARSE_RECURSION_DEPTH` | `1000` | Maximum AST parsing recursion depth |
-| `MAX_DIFF_SIZE_MB` | `50` | Maximum diff file size in MB |
-| `REGEX_TIMEOUT_SECONDS` | `10` | Regex matching timeout in seconds |
-| `PYTHON_EXEC_TIMEOUT_SECONDS` | `600` | Python subprocess execution timeout in seconds |
-
-### Data Integrity
+The action forwards the workflow environment to the Python subprocess, so
+token-based authentication is picked up automatically. Only the variables
+below are read by the action (Node entry or Python package):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MAX_VALID_LINE_NUMBER` | `1000000` | Maximum valid line number |
+| `GITHUB_TOKEN` / `GH_TOKEN` | - | GitHub API token for PR diff fetch (optional; used by `vllm_ascend` / `sglang`). The default `github.token` is sufficient for public repos and same-org PRs. |
+| `GITCODE_TOKEN` | - | GitCode API token (required for `torch_npu` when using `gitcode-pr`). Provide via a secret, e.g. `${{ secrets.GITCODE_TOKEN }}`. |
+| `PYTHON_EXEC_TIMEOUT_SECONDS` | `600` | Overall Python subprocess execution timeout in seconds (DoS guard). |
 
-### API Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GITHUB_TOKEN` | - | GitHub API token for higher rate limits (optional) |
-| `REPO_NAME` | `vllm_ascend` | Repository name for path normalization |
-
-### Example with Custom Limits
+### Example
 
 ```yaml
 - name: Precision Test Selector
   uses: lb-actions/precision-test@v1.0.0
   env:
-    MAX_DATABASE_SIZE_MB: 200
-    DATABASE_QUERY_TIMEOUT: 120
-    PYTHON_EXEC_TIMEOUT_SECONDS: 900
     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    PYTHON_EXEC_TIMEOUT_SECONDS: 900
   with:
     github-pr: ${{ github.repository }}#${{ github.event.pull_request.number }}
+```
+
+For GitCode PRs, pass a `GITCODE_TOKEN` secret instead:
+
+```yaml
+- name: Precision Test Selector
+  uses: lb-actions/precision-test@v1.0.0
+  env:
+    GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+  with:
+    repo: torch_npu
+    gitcode-pr: Ascend/pytorch#${{ github.event.pull_request.number }}
 ```
 
 ## Coverage Data Format
