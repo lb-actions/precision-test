@@ -106,6 +106,13 @@ class CodeChangeDetector:
           NamedTuple base) or module level, unless the annotation expression
           may have runtime side effects (calls, Annotated metadata) and the
           file has no ``from __future__ import annotations``.
+        - First-time bindings are excluded for pure insertions (needs base
+          content): every added line is an assignment binding simple names
+          that occur nowhere in the base file, with inert right-hand sides;
+          no meaningful line ends in a comma (such lines are call/signature
+          arguments, not statements); class-scope insertions follow dataclass
+          field-order rules (plain assigns are not fields, annotated fields
+          must land at or after the last existing field).
         - Isolated blank-line deletion (neighbours not deleted): treated as a
           one-line insertion -> candidate pair (line above, line below).
         - Pure insertions and blank-deletion pairs are classified via ast of

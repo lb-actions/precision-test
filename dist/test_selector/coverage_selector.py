@@ -49,20 +49,21 @@ class CoverageSelector:
         if not self.coverage_data_dir or not self.coverage_data_dir.exists():
             print(f"  Warning: Coverage data directory not found: {self.coverage_data_dir}")
             return test_cases
-        for item in self.coverage_data_dir.iterdir():
+        for item in self.coverage_data_dir.rglob("*"):
             if not item.is_dir():
                 continue
             name = item.name
             # 目录名规则由仓库适配器决定（vllm: tests__ 前缀 / cpu-ut；sglang: ____w__... 前缀）
             if not self.adapter.is_test_case_dir(name):
                 continue
-            # 布局探测：covdata/ 子目录（vllm/torch_npu）或目录下直接放置（sglang）
+            # 布局探测：covdata/ 子目录（vllm/pytorch）或目录下直接放置（sglang）
             covdata_dir = item / "covdata"
             has_cov_files = any(item.glob(self.adapter.coverage_file_glob))
             if covdata_dir.exists() and any(covdata_dir.glob(self.adapter.coverage_file_glob)):
                 has_cov_files = True
             if has_cov_files:
-                test_cases.append(name)
+                rel = item.relative_to(self.coverage_data_dir).as_posix()
+                test_cases.append(rel)
         return sorted(test_cases)
 
     def normalize_test_name(self, test_name: str) -> str:
@@ -142,7 +143,7 @@ class CoverageSelector:
 
             file_lines_map = defaultdict(set)  # filepath -> set of lines
 
-            # 布局探测：vllm/torch_npu 将 coverage 放在 covdata/ 子目录，sglang 直接放在测试目录下
+            # 布局探测：vllm/pytroch 将 coverage 放在 covdata/ 子目录，sglang 直接放在测试目录下
             cov_dirs = [covdata_dir] if covdata_dir.exists() else [test_case_dir]
 
             for cov_dir in cov_dirs:

@@ -10,10 +10,10 @@
 
 ```bash
 python -m test_selector --repo vllm_ascend --github-pr "vllm-project/vllm-ascend#12379"
-python -m test_selector --repo torch_npu --gitcode-pr "Ascend/pytorch#46780"
+python -m test_selector --repo torch_npu --github-pr "pytorch/pytorch#150000"
 ```
 
-> **PR 源选择**：vllm_ascend / sglang 使用 GitHub（`--github-pr`），torch_npu 使用 GitCode（`--gitcode-pr`）。
+> **PR 源选择**：三仓库均使用 GitHub（`--github-pr`）；torch_npu 检测上游仓库 [pytorch/pytorch](https://github.com/pytorch/pytorch)。
 
 **核心工作流**（main 函数结构）：
 
@@ -29,7 +29,7 @@ python -m test_selector --repo torch_npu --gitcode-pr "Ascend/pytorch#46780"
 ├─────────────────────────────────────────────────────────────────┤
 │  动作2: 全量触发变更检测（adapter.has_full_suite_changes）         │
 │    - vllm_ascend: csrc/ 目录变更（非 .md）→ 全量测试              │
-│    - sglang / torch_npu: 恒为 False（原生/子模块变更走精准匹配）    │
+│    - sglang / torch_npu: 恒为 False（原生代码变更不解析进精准匹配） │
 ├─────────────────────────────────────────────────────────────────┤
 │  动作3: 产品代码变更检测（change_detector）                        │
 │    - parse_pr_diff_file() → changed_files_with_lines, renames   │
@@ -51,7 +51,7 @@ python -m test_selector --repo torch_npu --gitcode-pr "Ascend/pytorch#46780"
 - **精准匹配**：无全量触发时，基于行/函数/文件级匹配选择测试
 - **文件重命名检测**：rename 新路径在覆盖率数据中不存在，用旧路径做文件级匹配召回
 - **新增/删除处理**：新增测试文件直接加入；已删除测试文件从结果中移除
-- **排除变更场景**：纯注释/docstring、纯类型注解、函数/类定义间空行插入、新增 def/class 整体、新文件等不构成代码变更的场景，在 diff 解析阶段剔除（见第五章）
+- **排除变更场景**：纯注释/docstring、纯类型注解、首次新增的变量绑定、函数/类定义间空行插入、新增 def/class 整体、新文件等不构成代码变更的场景，在 diff 解析阶段剔除（见第五章）
 
 **代码结构**：
 
@@ -61,7 +61,7 @@ test_selector/
 ├── __main__.py            # python -m test_selector 入口
 ├── github.py              # PR 拉取（公共）
 ├── pr_detector.py         # 检测 PR 内容：测试文件/删除文件/全量触发（规则委托 adapter）
-├── diff_parser.py         # 排除变更场景：纯注释/docstring/纯注解/新文件跳过等
+├── diff_parser.py         # 排除变更场景：纯注释/docstring/纯注解/首次绑定/新文件跳过等
 ├── noise_filter.py        # map 噪音处理：import/def/class/docstring/空行
 ├── function_parser.py     # 函数区间解析（sglang 优化版，区间线性扫描）
 ├── coverage_selector.py   # 构建 测试用例→覆盖文件/行号 映射
@@ -71,7 +71,7 @@ test_selector/
     ├── base.py            #   RepoAdapter 抽象接口
     ├── vllm_ascend.py     #   vllm_ascend 适配器
     ├── sglang.py          #   sglang 适配器
-    ├── torch_npu.py       #   torch_npu（PyTorch / GitCode）适配器
+    ├── torch_npu.py     #   torch_npu（上游 PyTorch / GitHub）适配器
     └── __init__.py        #   适配器注册表 get_adapter()
 ```
 
@@ -99,22 +99,22 @@ test_selector/
 │   ├── <sglang 布局>/
 │   │   └── ____w__sglang__sglang__test__registered__npu__...__test_xxx/
 │   │       └── coverage.linux-*     # sglang：覆盖率文件直接放在测试目录下
-│   └── <torch_npu 布局>/
-│       └── _inductor__test_add/     # torch_npu：目录名含 __ 或以 test_ 开头
-│           └── covdata/             # torch_npu：覆盖率文件在 covdata/ 子目录
+│   └── <pytorch 布局>/
+│       └── _inductor__test_add/     # pytorch：目录名含 __ 或以 test_ 开头
+│           └── covdata/             # pytorch：覆盖率文件在 covdata/ 子目录
 │               └── coverage.*
 │
 ├── covstub/                         # 源码目录（函数级匹配需要）
 │   ├── vllm_ascend/                 #   vllm：对应仓库根目录
 │   ├── sglang/                      #   sglang：对应仓库 python/sglang/
-│   └── torch_npu/                   #   torch_npu：对应 PyTorch 仓库根目录
+│   └── torch/                       #   torch_npu：对应 pytorch/pytorch 仓库根目录
 ├── test_case_map.json               # 自动生成的映射文件
 └── recommended_pytest_paths.txt     # 推荐测试用例列表（输出）
 ```
 
 **覆盖率目录布局自动探测**（三仓库兼容）：
 
-- 测试目录下存在 `covdata/` 子目录（vllm / torch_npu 布局）→ 从 `covdata/` 读取 `coverage.*`
+- 测试目录下存在 `covdata/` 子目录（vllm / pytorch 布局）→ 从 `covdata/` 读取 `coverage.*`
 - 无 `covdata/` 子目录（sglang 布局）→ 直接读取测试目录下的 `coverage.*`
 
 **测试用例目录识别规则**（adapter 提供）：
@@ -139,7 +139,7 @@ test_selector/
 | ----------- | ---------------- | ----------------------------------------------------------------- |
 | vllm_ascend | `vllm_ascend/`   | `vllm_ascend/core/worker.py` → `core/worker.py`                   |
 | sglang      | `python/sglang/` | `python/sglang/srt/models/qwen3_vl.py` → `srt/models/qwen3_vl.py` |
-| torch_npu   | `torch_npu/`     | `torch_npu/contrib/xxx.py` → `contrib/xxx.py`                     |
+| torch_npu   | `torch/`         | `torch/distributed/utils.py` → `distributed/utils.py`             |
 
 ---
 
@@ -191,9 +191,9 @@ python -m test_selector --repo sglang \
     --github-pr "sgl-project/sglang#37043" \
     --source-dir ./covstub
 
-# torch_npu（GitCode）
+# torch_npu（GitHub 上游 pytorch/pytorch）
 python -m test_selector --repo torch_npu \
-    --gitcode-pr "Ascend/pytorch#46780" \
+    --github-pr "pytorch/pytorch#150000" \
     --source-dir ./covstub
 ```
 
@@ -210,8 +210,8 @@ python -m test_selector --repo torch_npu \
 | 参数                      | 必填       | 说明                                                                                          |
 | ----------------------- | -------- | ------------------------------------------------------------------------------------------- |
 | `--repo` / `-r`         | 否        | 仓库适配器：`vllm_ascend` / `sglang` / `torch_npu`（默认：`vllm_ascend`，薄入口默认各自仓库）                    |
-| `--github-pr` / `-pr`   | 二选一      | GitHub PR（vllm_ascend / sglang），格式：`owner/repo#pr_number` 或仅 `pr_number`（自动从 git remote 推导） |
-| `--gitcode-pr`          | 二选一      | GitCode PR（torch_npu），格式：`owner/repo#pr_number` 或仅 `pr_number`（自动从 git remote 推导）；两参数互斥     |
+| `--github-pr` / `-pr`   | 二选一      | GitHub PR（三仓库通用），格式：`owner/repo#pr_number` 或仅 `pr_number`（自动从 git remote 推导）；torch_npu 传上游 `pytorch/pytorch#N` |
+| `--gitcode-pr`          | 二选一      | GitCode PR（公共备用模块，当前无仓库默认使用），格式：`owner/repo#pr_number` 或仅 `pr_number`（自动从 git remote 推导）；两参数互斥     |
 | `--source-dir` / `-s`   | 建议       | 源码目录（默认：`covstub`；函数级匹配与噪音过滤需要）                                                             |
 | `--map-file` / `-m`     | 否        | 映射文件（默认：`test_case_map.json`）                                                               |
 | `--coverage-dir` / `-c` | 构建 map 时 | 覆盖率数据目录（默认：`coverage`）                                                                      |
@@ -244,12 +244,12 @@ if args.disable_function_match:
 
 | 维度      | vllm_ascend                                         | sglang                                                          | torch_npu                                                   |
 | ------- | --------------------------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------- |
-| PR 源    | GitHub                                              | GitHub                                                          | GitCode                                                     |
-| 产品代码前缀  | `vllm_ascend/`                                      | `python/sglang/`                                                | `torch_npu/`                                                |
+| PR 源    | GitHub                                              | GitHub                                                          | GitHub（pytorch/pytorch）                                     |
+| 产品代码前缀  | `vllm_ascend/`                                      | `python/sglang/`                                                | `torch/`                                                     |
 | 测试目录识别  | `tests__` 前缀 / `cpu-ut`                             | `____w__sglang__sglang__test__` 前缀                              | 目录名含 `__` 或以 `test_` 开头                                     |
 | 覆盖率文件位置 | `covdata/` 子目录                                      | 测试目录下直接放置（兼容探测 covdata）                                         | `covdata/` 子目录                                              |
 | 测试文件规则  | `tests/e2e/pull_request/`、`tests/ut/` 下 `test_*.py` | `test/registered/`、`test/{unit,e2e,integration}/` 下 `test_*.py` | `test/` 下 `test_*.py` |
-| 全量触发变更  | csrc/ 目录（非 .md）→ 全量测试                               | 无（csrc/rust 走精准匹配）                                              | 无（submodule/原生变更走精准匹配）                                      |
+| 全量触发变更  | csrc/ 目录（非 .md）→ 全量测试                               | 无（csrc/rust 走精准匹配）                                              | 无（原生变更走精准匹配）                                                |
 | 测试名规范化  | `--`→`::`、`__`→`/`、文件级补 `.py`                       | 剥离编码前缀恢复 `test/`、`__`→`/`、`--`→`::`                             | `--`→`::`、`__`→`/`、文件级补 `.py`                               |
 | 变更检测    | 本地哈希比对（默认）或 PR diff                                 | 同左                                                              | 同左                                                          |
 
@@ -272,7 +272,7 @@ if args.disable_function_match:
 
 > sglang 不触发全量：`csrc/*.cu`、`rust/*.rs` 等原生代码变更不会被解析进精准匹配（仅保留 `.py`），推荐结果由 Python 产品代码匹配 + 新增/删除测试文件决定。
 > 
-> torch_npu 不触发全量：submodule 指针更新（如 `third_party/torchair/torchair` 的 commit 变更）与原生代码变更均不会被解析进精准匹配。**注意**：submodule 指针更新意味着子模块内部有真实代码变更，但工具无法穿透到子模块 diff，此时可能返回 0 推荐，存在漏测风险，建议人工评估（详见故障排除表）。
+> torch_npu 不触发全量：`torch/csrc/` 等原生代码（C++/CUDA）变更不会被解析进精准匹配（仅保留 `.py`）。**注意**：纯原生代码变更的 PR 可能返回 0 推荐，此时存在漏测风险，建议人工评估是否需跑相关用例（详见故障排除表）。
 
 ### 排除变更场景（diff_parser）
 
@@ -282,6 +282,7 @@ if args.disable_function_match:
 | ------------------------------------ | ------------------------------------ |
 | 纯注释/docstring 变更                     | 删除组全为注释/docstring 且新增为注释/doc 说明 → 剔除 |
 | 纯类型注解变更（插入/替换/删除）                    | 可证明惰性的注解（函数体内、普通类、模块级，无副作用）→ 豁免      |
+| 首次新增的变量绑定（纯插入）                    | 全部为绑定全新名字的带值赋值（名字在 base 中不存在、RHS 惰性、无尾逗号行）→ 豁免 |
 | 函数/类定义之间的空行插入                        | 位于两个 def/class 之间 → 排除               |
 | 新增 def/class 整体                      | 插入文本属于新定义的函数/类 → 排除                  |
 | 新文件（`--- /dev/null` + `@@ -0,0 ...`） | 无 base 版本，跳过行级解析（避免无意义的 base 内容拉取）   |
@@ -389,9 +390,9 @@ for path, label in file_level_paths:         # rename 旧路径 + 删除路径
 - **PR 模式**：`parse_pr_diff_file()` 解析 PR diff，产出变更行号 + 重命名映射 + 删除列表
 - **本地模式**（默认）：`detect_changes_by_comparison()` 扫描 `--source-dir` 下全部 `.py`，与 `.file_hashes.json` 基线比对 MD5，变更文件保守返回全部行号（1~9999），首次运行生成基线
 
-### GitCode PR 拉取（torch_npu）
+### GitCode PR 拉取（公共备用模块）
 
-torch_npu 的 PR 拉取通过公共模块 `test_selector.gitcode`（`--gitcode-pr`），与 GitHub 版（`test_selector.github`，`--github-pr`）的差异：
+GitCode PR 拉取通过公共模块 `test_selector.gitcode`（`--gitcode-pr`，当前无仓库默认使用；torch_npu 已切换到 GitHub 上游仓库 pytorch/pytorch），与 GitHub 版（`test_selector.github`，`--github-pr`）的差异：
 
 | 维度            | github.py                                            | gitcode.py                                                           |
 | ------------- | ---------------------------------------------------- | -------------------------------------------------------------------- |
@@ -456,7 +457,7 @@ torch_npu 的 PR 拉取通过公共模块 `test_selector.gitcode`（`--gitcode-p
 **注意**：
 
 - map 的 key 为 normalize 后的测试路径（vllm：`tests/.../test_xxx.py` 或 `...::test_func`、`cpu-ut`；sglang：`test/.../test_xxx.py`；torch_npu：`test/.../test_xxx.py`、`_inductor/test_add.py` 等，文件级补 `.py`）
-- files 的 key 为剥离产品代码前缀后的相对路径（vllm：`core/worker.py`；sglang：`srt/xxx.py`；torch_npu：`contrib/xxx.py`）
+- files 的 key 为剥离产品代码前缀后的相对路径（vllm：`core/worker.py`；sglang：`srt/xxx.py`；torch_npu：`distributed/xxx.py`）
 - 保存时强制使用 LF 换行（`newline="\n"`），避免 Windows CRLF 导致 JSON 体积膨胀，保证跨平台 git 差异对比一致
 
 ---
@@ -533,9 +534,9 @@ python -m test_selector --repo vllm_ascend \
 python -m test_selector --repo sglang \
     --github-pr "sgl-project/sglang#37043" -s ./covstub
 
-# GitCode PR（torch_npu）
+# GitHub PR（torch_npu，上游 pytorch/pytorch）
 python -m test_selector --repo torch_npu \
-    --gitcode-pr "Ascend/pytorch#46780" -s ./covstub
+    --github-pr "pytorch/pytorch#150000" -s ./covstub
 ```
 
 ### 场景2：更新覆盖率数据后重建映射
@@ -601,10 +602,10 @@ selected, reason = ts.select_tests(changed, source_dir="covstub")
 | `没有测试用例覆盖变更的代码行`                                                    | 变更文件无覆盖数据                                                         | 确认覆盖率数据来自变更前的全量用例                                                                                     |
 | `解析 PR 失败` / GitHub API 超时                                          | 内网无法直连 GitHub                                                     | 设置代理环境变量后重试（见下方）                                                                                      |
 | `WinError 10060` 连接超时（GitCode）                                      | 内网无法直连 GitCode API                                                | 设置代理环境变量后重试（见下方）；git 全局已配置 `proxycn2.huawei.com:8080` 认证代理时，PowerShell 中执行 `$env:HTTPS_PROXY=...` 后重试 |
-| `函数级匹配失败`                                                           | 源码目录路径不对                                                          | 确认 `--source-dir` 指向包含 `vllm_ascend/` / `sglang/` / `torch_npu/` 包的根目录                                |
+| `函数级匹配失败`                                                           | 源码目录路径不对                                                          | 确认 `--source-dir` 指向包含 `vllm_ascend/` / `sglang/` / `torch/` 包的根目录                                |
 | 推荐结果过多                                                              | 变更函数被大量测试覆盖                                                       | 启用 `--dedup` 或提高 `--min-affected`                                                                     |
 | 推荐结果为空                                                              | PR 仅含原生代码变更且无新测试文件（sglang）                                        | 正常，原生代码变更不触发全量                                                                                        |
-| 推荐结果为空                                                              | PR 仅含 submodule 指针更新（torch_npu，如 `third_party/torchair/torchair`） | 正常但**存在漏测风险**：submodule commit 变更意味着子模块内部有真实代码变更，工具无法穿透；建议人工评估是否需跑 torchchair 相关用例                    |
+| 推荐结果为空                                                              | PR 仅含原生代码变更（torch_npu，如 `torch/csrc/` 下 C++/CUDA 文件）        | 正常但**存在漏测风险**：原生代码变更不解析进精准匹配；建议人工评估是否需跑相关用例                                                        |
 | `Full-Suite Changes Detected`（vllm）                                 | diff 含 csrc/ 目录变更                                                 | 正常行为，触发全量测试                                                                                           |
 | `New Test Files Added: X`                                           | diff 中有新增测试文件                                                     | 正常，直接加入推荐列表                                                                                           |
 | `Deleted Test Files Removed: X`                                     | diff 中有已删除测试文件                                                    | 正常，从推荐列表移除                                                                                            |
@@ -620,7 +621,7 @@ set HTTP_PROXY=http://<user>:<pwd>@proxycn2.huawei.com:8080/
 set HTTPS_PROXY=http://<user>:<pwd>@proxycn2.huawei.com:8080/
 
 python -m test_selector --repo vllm_ascend --github-pr "vllm-project/vllm-ascend#16104" -s ./covstub
-python -m test_selector --repo torch_npu --gitcode-pr "Ascend/pytorch#46780" -s ./covstub
+python -m test_selector --repo torch_npu --github-pr "pytorch/pytorch#150000" -s ./covstub
 ```
 
 > **说明**：

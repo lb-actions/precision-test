@@ -10,11 +10,11 @@
 
 用法：
     python -m test_selector --repo vllm_ascend --github-pr owner/repo#123
-    python -m test_selector --repo torch_npu --gitcode-pr Ascend/pytorch#123
+    python -m test_selector --repo torch_npu --github-pr pytorch/pytorch#123
     python -m test_selector --repo sglang --build-map --coverage-dir coverage
     python vllm/test_selector.py --github-pr 123          # 薄入口（默认 vllm_ascend）
     python sglang/test_selector.py --github-pr 123        # 薄入口（默认 sglang）
-    python PyTorch/test_selector.py --gitcode-pr 123      # 薄入口（默认 torch_npu）
+    python PyTorch/test_selector.py --github-pr 123       # 薄入口（默认 torch_npu，检测上游 pytorch/pytorch）
 """
 
 import argparse

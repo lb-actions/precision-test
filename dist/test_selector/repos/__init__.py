@@ -11,7 +11,7 @@ __all__ = ["RepoAdapter", "VllmAscendAdapter", "SglangAdapter", "TorchNpuAdapter
 _ADAPTERS = {
     "vllm_ascend": VllmAscendAdapter,
     "sglang": SglangAdapter,
-    "torch_npu": TorchNpuAdapter,
+    "pytorch": TorchNpuAdapter,
 }
 
 AVAILABLE_REPOS = tuple(_ADAPTERS.keys())
@@ -21,7 +21,7 @@ def get_adapter(repo_name: str) -> RepoAdapter:
     """按仓库名获取适配器实例。
 
     Args:
-        repo_name: 仓库名（vllm_ascend / sglang / torch_npu）
+        repo_name: 仓库名（vllm_ascend / sglang / pytorch）
 
     Returns:
         RepoAdapter 实例

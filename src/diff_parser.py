@@ -4,6 +4,8 @@
 代码变更的场景：
 - 纯注释/docstring 变更
 - 纯类型注解变更（插入/替换/删除三个方向，可证明惰性时豁免）
+- 首次新增的变量绑定（纯插入块全部为绑定全新名字的带值赋值，RHS 惰性，
+  无尾逗号行——尾逗号行是调用/签名参数而非语句）
 - 函数/类定义之间的空行插入
 - 新增函数/类整体
 
@@ -318,14 +320,27 @@ def _class_consumes_annotations(cls_node: ast.ClassDef, class_map: dict) -> bool
     return False
 
 
-def _collect_class_info(source: str) -> tuple[list[tuple], dict[str, ast.ClassDef], bool]:
-    """Parse source and return (scopes, class_map, has_future):
+def _arg_names(args: ast.arguments) -> set[str]:
+    """Names bound by a function/lambda parameter list."""
+    names = {a.arg for a in args.posonlyargs + args.args + args.kwonlyargs}
+    if args.vararg:
+        names.add(args.vararg.arg)
+    if args.kwarg:
+        names.add(args.kwarg.arg)
+    return names
 
-    scopes    : [(lineno, end_lineno, col_offset, node)] of every
-                function/class definition, for annotation scope resolution;
-    class_map : {class name -> ClassDef} for same-file base resolution
-                (a later definition shadows an earlier one);
-    has_future: the file has ``from __future__ import annotations``.
+
+def _collect_class_info(source: str) -> tuple[list[tuple], dict[str, ast.ClassDef], bool, set[str]]:
+    """Parse source and return (scopes, class_map, has_future, known_names):
+
+    scopes      : [(lineno, end_lineno, col_offset, node)] of every
+                  function/class definition, for annotation scope resolution;
+    class_map   : {class name -> ClassDef} for same-file base resolution
+                  (a later definition shadows an earlier one);
+    has_future  : the file has ``from __future__ import annotations``.
+    known_names : every name the base file already binds or reads (Name
+                  occurrences, def/class names, import aliases, parameters),
+                  for first-time-binding detection.
     """
     tree = ast.parse(source)
     scopes = [
@@ -344,7 +359,24 @@ def _collect_class_info(source: str) -> tuple[list[tuple], dict[str, ast.ClassDe
         and any(alias.name == "annotations" for alias in n.names)
         for n in tree.body
     )
-    return scopes, class_map, has_future
+    known_names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            known_names.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            known_names.add(node.name)
+            known_names.update(_arg_names(node.args))
+        elif isinstance(node, ast.ClassDef):
+            known_names.add(node.name)
+        elif isinstance(node, ast.Lambda):
+            known_names.update(_arg_names(node.args))
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                known_names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                known_names.add(alias.asname or alias.name.split(".")[0])
+    return scopes, class_map, has_future, known_names
 
 
 def _insertion_scope(scopes: list[tuple], a: int, b: int, add_indent: int | None):
@@ -391,7 +423,7 @@ def _pure_annotation_insert_reason(
     """
     if ann_ctx is None or not add_texts:
         return None
-    scopes, class_map, has_future = ann_ctx
+    scopes, class_map, has_future, _known = ann_ctx
     anns = _parse_pure_annotations(add_texts)
     if not anns:
         return None
@@ -422,7 +454,7 @@ def _pure_annotation_change_exempt(
     """
     if ann_ctx is None:
         return False
-    scopes, class_map, has_future = ann_ctx
+    scopes, class_map, has_future, _known = ann_ctx
     del_anns = _parse_pure_annotations([t for _, t in del_lines])
     if not del_anns:
         return False
@@ -446,6 +478,161 @@ def _pure_annotation_change_exempt(
     return not _class_consumes_annotations(node, class_map)
 
 
+def _parse_assignments(texts) -> list[tuple[ast.stmt, list[str]]] | None:
+    """Parse diff lines as a block of value-carrying simple-name assignments.
+
+    Returns [(stmt, target_names), ...] when every meaningful (non-blank,
+    non-comment) line forms assignments (``x = v`` or ``x: T = v``) whose
+    targets are all plain names; None when the block is unparsable or
+    contains anything else (bare annotations, attribute/subscript targets,
+    tuple unpacking, any other statement).
+    """
+    lines = [t for t in texts if t.strip() and not t.strip().startswith("#")]
+    if not lines:
+        return None
+    block = textwrap.dedent("\n".join(lines))
+    try:
+        tree = ast.parse(block)
+    except (SyntaxError, ValueError):
+        return None
+    stmts = []
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign):
+            if not all(isinstance(t, ast.Name) for t in stmt.targets):
+                return None
+            stmts.append((stmt, [t.id for t in stmt.targets]))
+        elif isinstance(stmt, ast.AnnAssign):
+            if stmt.value is None or not isinstance(stmt.target, ast.Name):
+                return None
+            stmts.append((stmt, [stmt.target.id]))
+        else:
+            return None
+    return stmts
+
+
+_LAZY_RHS_NODES = (
+    ast.Constant,
+    ast.Name,
+    ast.Attribute,
+    ast.Tuple,
+    ast.List,
+    ast.Set,
+    ast.Dict,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.BoolOp,
+    ast.operator,
+    ast.unaryop,
+    ast.boolop,
+    ast.expr_context,
+)
+
+
+def _assign_rhs_lazy(value: ast.expr) -> bool:
+    """True when the right-hand side is free of runtime side effects:
+    literals, names, attributes and containers/arithmetic over those only
+    (no calls, subscripts, comprehensions, lambdas, walrus...). Attribute
+    access and arithmetic can still trigger property/__add__ hooks - an
+    accepted risk; dict unpacking ({**d}) is not: it iterates the source
+    mapping at runtime."""
+    for node in ast.walk(value):
+        if not isinstance(node, _LAZY_RHS_NODES):
+            return False
+        if isinstance(node, ast.Dict) and any(k is None for k in node.keys):
+            return False
+    return True
+
+
+def _decorator_tail(dec: ast.expr) -> str | None:
+    """Simple name of a decorator (call decorators use their callee):
+    'dataclass' for @dataclass / @dataclasses.dataclass / @dataclass(...)."""
+    expr = dec.func if isinstance(dec, ast.Call) else dec
+    if isinstance(expr, ast.Name):
+        return expr.id
+    if isinstance(expr, ast.Attribute):
+        return expr.attr
+    return None
+
+
+def _class_dataclass_like(cls_node: ast.ClassDef, class_map: dict) -> bool:
+    """True when the class or a same-file ancestor is decorated with
+    @dataclass (annotated class-body statements then become __init__ fields
+    whose order matters)."""
+    stack, seen = [cls_node], set()
+    while stack:
+        node = stack.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        if any(_decorator_tail(d) == "dataclass" for d in node.decorator_list):
+            return True
+        for base in node.bases:
+            name = _base_simple_name(base)
+            parent = class_map.get(name) if name else None
+            if parent is not None and id(parent) not in seen:
+                stack.append(parent)
+    return False
+
+
+def _last_field_line(cls_node: ast.ClassDef) -> int | None:
+    """Last base line of the class's annotated fields (dataclass __init__
+    parameter order follows field order); None when the class has none."""
+    last = None
+    for stmt in cls_node.body:
+        if isinstance(stmt, ast.AnnAssign):
+            end = stmt.end_lineno or stmt.lineno
+            last = end if last is None else max(last, end)
+    return last
+
+
+def _new_binding_insert_reason(
+    add_texts,
+    a: int,
+    b: int,
+    add_indent: int | None,
+    ann_ctx: tuple | None,
+) -> str | None:
+    """Skip reason when a pure insertion consists solely of assignments that
+    bind provably-new names with inert right-hand sides; None to record.
+
+    Base code cannot read a name that does not exist yet, so every reader of
+    a first-time binding is itself an added line carrying its own anchor -
+    the anchor here is noise (an import-time fingerprint in module/class
+    scopes). Gates: no meaningful line ends in a comma (such lines are call
+    or signature arguments, not statements); the block is all simple-name
+    assignments; no target is a
+    dunder or already occurs anywhere in the base file (Name occurrences,
+    def/class/import/parameter bindings); right-hand sides are inert; and in
+    class scope the class must be plain or dataclass-like, where plain
+    assigns are never fields while annotated fields are only exempt when
+    inserted at or after the last existing field (a middle field insertion
+    would silently rebind positional constructor calls).
+    """
+    if ann_ctx is None or not add_texts:
+        return None
+    effective = [t for t in add_texts if t.strip() and not t.strip().startswith("#")]
+    if not effective or effective[-1].rstrip().endswith(","):
+        return None
+    scopes, class_map, has_future, known_names = ann_ctx
+    stmts = _parse_assignments(add_texts)
+    if not stmts:
+        return None
+    for stmt, names in stmts:
+        if any(name.startswith("__") or name in known_names for name in names):
+            return None
+        if not _assign_rhs_lazy(stmt.value):
+            return None
+    scope = _insertion_scope(scopes, a, b, add_indent)
+    if isinstance(scope, ast.ClassDef) and _class_consumes_annotations(scope, class_map):
+        if not _class_dataclass_like(scope, class_map):
+            return None
+        if any(isinstance(stmt, ast.AnnAssign) for stmt, _ in stmts):
+            last_field = _last_field_line(scope)
+            if last_field is not None and a < last_field:
+                return None
+    return "first-time binding of new name(s)"
+
+
 def _classify_candidate_pairs(
     affected: set[int],
     pairs: list[tuple],
@@ -460,10 +647,17 @@ def _classify_candidate_pairs(
     comment/docstring line in the base file AND the added lines are comments or
     doc prose (not parseable Python), i.e. a pure comment/docstring change.
     Pure type annotation changes are dropped in every direction (insertion,
-    replacement, deletion) when provably inert: function-local annotations are
-    never evaluated; class-level ones need a plain class (no decorators, no
-    TypedDict/Protocol/Enum/BaseModel/NamedTuple base) and side-effect-free
+    replacement, deletion) when provably inert: function-local annotations
+    are never evaluated; class-level ones need a plain class (no decorators,
+    no TypedDict/Protocol/Enum/BaseModel/NamedTuple base) and side-effect-free
     annotation expressions unless the file has future annotations.
+    First-time bindings are dropped when a pure insertion (no meaningful
+    line ends in a comma - those are call/signature arguments) consists
+    solely of assignments binding simple names that occur nowhere in the
+    base file with inert right-hand sides (base code cannot read a name that
+    does not exist yet; readers added in the same PR carry their own anchors);
+    in dataclass-like classes annotated fields are only dropped when inserted
+    at or after the last existing field.
     Candidate pairs: without base content (or non-parseable Python) both sides
     of each pair are counted, bounded by the hunk.
     """
@@ -532,6 +726,8 @@ def _classify_candidate_pairs(
                         reason = "belongs to a newly added function/class"
             if reason is None:
                 reason = _pure_annotation_insert_reason(add_texts, a, b, add_indent, ann_ctx)
+            if reason is None:
+                reason = _new_binding_insert_reason(add_texts, a, b, add_indent, ann_ctx)
         # kind == 'blank': isolated blank deletion == one-line insertion
         elif _between_definitions(a, b, end_lines, start_lines, blanks):
             reason = "between function/class definitions"
