@@ -21,7 +21,7 @@ class RepoAdapter(ABC):
     #: 覆盖率数据目录下的测试用例文件夹命名前缀；None 表示无固定前缀（vllm 用 tests__ 前缀 + cpu-ut）
     test_case_dir_prefix: str | None = None
     #: 覆盖率文件名 glob 模式（测试目录或其 covdata/ 子目录下）。
-    #: 默认 "coverage*" 兼容 pytest-cov 裸文件（torch_npu: coverage）与原始格式
+    #: 默认 "coverage*" 兼容 pytest-cov 裸文件（pytorch: coverage）与原始格式
     #: 带后缀文件（vllm/sglang: coverage.linux-...-workflow.xxx）。
     coverage_file_glob: str = "coverage*"
 

@@ -3,8 +3,8 @@
  *
  * Coverage-based precision test selector supporting line, function, and file
  * granularity. Wraps the Python `test_selector` package (invoked via
- * `python -m test_selector`) and supports vllm_ascend / sglang (GitHub PR) and
- * torch_npu (GitCode PR).
+ * `python -m test_selector`) and supports vllm_ascend / sglang / pytorch
+ * (GitHub PR); pytorch tracks the upstream pytorch/pytorch repository.
  *
  * The bundled Python package ships next to this script at `dist/test_selector/`
  * and is made importable via PYTHONPATH so `python -m test_selector` resolves

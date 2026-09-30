@@ -4,14 +4,14 @@ author: 'openlibing'
 
 inputs:
   repo:
-    description: 'Repository adapter: vllm_ascend / sglang / torch_npu (default: vllm_ascend)'
+    description: 'Repository adapter: vllm_ascend / sglang / pytorch (default: vllm_ascend)'
     required: false
     default: 'vllm_ascend'
   github-pr:
-    description: 'GitHub PR, format: owner/repo#pr_number (for vllm_ascend / sglang)'
+    description: 'GitHub PR, format: owner/repo#pr_number (for vllm_ascend / sglang / pytorch; pytorch uses upstream pytorch/pytorch#N)'
     required: false
   gitcode-pr:
-    description: 'GitCode PR, format: owner/repo#pr_number (for torch_npu); mutually exclusive with github-pr'
+    description: 'GitCode PR, format: owner/repo#pr_number (public fallback module, currently unused by default adapters); mutually exclusive with github-pr'
     required: false
   source-dir:
     description: 'Source code directory (default: covstub)'

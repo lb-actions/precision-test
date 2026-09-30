@@ -10,9 +10,9 @@ granularity (file-level matching is reserved for renamed/deleted product code).
   with file-level matching applied internally to renamed/deleted product code
 - **Coverage-based selection**: Uses coverage data to identify affected test cases
 - **Multi-repo adapters**: Built-in adapters for `vllm_ascend`, `sglang`, and
-  `torch_npu`, selected via the `repo` input
-- **PR integration**: Fetches PR diff from GitHub API (`vllm_ascend` / `sglang`)
-  or GitCode API (`torch_npu`)
+  `pytorch`, selected via the `repo` input
+- **PR integration**: Fetches PR diff from GitHub API (`vllm_ascend` / `sglang`
+  / `pytorch`); `pytorch` tracks the upstream `pytorch/pytorch` repository
 - **Security hardening**: Path traversal validation and subprocess execution
   timeout
 
@@ -64,14 +64,14 @@ jobs:
     build-map: 'true'
 ```
 
-### GitCode PR (torch_npu)
+### GitHub PR (pytorch)
 
 ```yaml
 - name: Precision Test Selector
   uses: lb-actions/precision-test@v1.0.0
   with:
-    repo: torch_npu
-    gitcode-pr: Ascend/pytorch#${{ github.event.pull_request.number }}
+    repo: pytorch
+    github-pr: pytorch/pytorch#${{ github.event.pull_request.number }}
     source-dir: covstub
 ```
 
@@ -79,9 +79,9 @@ jobs:
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `repo` | Repository adapter: `vllm_ascend` / `sglang` / `torch_npu` | No | `vllm_ascend` |
-| `github-pr` | GitHub PR (vllm_ascend / sglang), format: `owner/repo#pr_number` or just `pr_number` | No | - |
-| `gitcode-pr` | GitCode PR (torch_npu), format: `owner/repo#pr_number`; mutually exclusive with `github-pr` | No | - |
+| `repo` | Repository adapter: `vllm_ascend` / `sglang` / `pytorch` | No | `vllm_ascend` |
+| `github-pr` | GitHub PR (vllm_ascend / sglang / pytorch), format: `owner/repo#pr_number` or just `pr_number`; pytorch uses upstream `pytorch/pytorch#N` | No | - |
+| `gitcode-pr` | GitCode PR (public fallback module, currently unused by default adapters), format: `owner/repo#pr_number`; mutually exclusive with `github-pr` | No | - |
 | `source-dir` | Source code directory | No | `covstub` |
 | `map-file` | Test case map file | No | `test_case_map.json` |
 | `coverage-dir` | Coverage data directory (required only when building the map) | No | `coverage` |
@@ -118,8 +118,8 @@ below are read by the action (Node entry or Python package):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GITHUB_TOKEN` / `GH_TOKEN` | - | GitHub API token for PR diff fetch (optional; used by `vllm_ascend` / `sglang`). The default `github.token` is sufficient for public repos and same-org PRs. |
-| `GITCODE_TOKEN` | - | GitCode API token (required for `torch_npu` when using `gitcode-pr`). Provide via a secret, e.g. `${{ secrets.GITCODE_TOKEN }}`. |
+| `GITHUB_TOKEN` / `GH_TOKEN` | - | GitHub API token for PR diff fetch (used by `vllm_ascend` / `sglang` / `pytorch`). The default `github.token` is sufficient for public repos and same-org PRs. |
+| `GITCODE_TOKEN` | - | GitCode API token (only when using the `gitcode-pr` fallback; unused by default adapters). Provide via a secret, e.g. `${{ secrets.GITCODE_TOKEN }}`. |
 | `PYTHON_EXEC_TIMEOUT_SECONDS` | `600` | Overall Python subprocess execution timeout in seconds (DoS guard). |
 
 ### Example
@@ -134,16 +134,17 @@ below are read by the action (Node entry or Python package):
     github-pr: ${{ github.repository }}#${{ github.event.pull_request.number }}
 ```
 
-For GitCode PRs, pass a `GITCODE_TOKEN` secret instead:
+For `pytorch` (upstream `pytorch/pytorch` PRs), pass the upstream repository
+explicitly:
 
 ```yaml
 - name: Precision Test Selector
   uses: lb-actions/precision-test@v1.0.0
   env:
-    GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   with:
-    repo: torch_npu
-    gitcode-pr: Ascend/pytorch#${{ github.event.pull_request.number }}
+    repo: pytorch
+    github-pr: pytorch/pytorch#${{ github.event.pull_request.number }}
 ```
 
 ## Coverage Data Format
