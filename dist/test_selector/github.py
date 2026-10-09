@@ -160,7 +160,7 @@ def fetch_pr_diff(pr_spec: str) -> tuple[str, Callable[[str], str]]:
                     return base64.b64decode(data["content"]).decode("utf-8")
                 blob_sha = data.get("sha")
                 if not blob_sha:
-                    raise ValueError(f"unexpected response: {data.get("encoding")!r}")
+                    raise ValueError(f"unexpected response: {data.get('encoding')!r}")
                 blob_url = f"https://api.github.com/repos/{repo}/git/blobs/{blob_sha}"
                 req = _github_request(blob_url, github_token)
                 with urllib.request.urlopen(req, timeout=60, context=ssl_context) as response:
