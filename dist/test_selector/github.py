@@ -51,9 +51,9 @@ def parse_pr_spec(pr_spec: str) -> tuple[str, str]:
     return repo, pr_num
 
 
-def _github_request(url: str, github_token: str | None) -> urllib.request.Request:
+def _github_request(url: str, github_token: str | None, accept: str = "application/vnd.github.v3+json") -> urllib.request.Request:
     """构造带认证头的 GitHub API 请求。"""
-    headers = {"User-Agent": "test-selector/1.0", "Accept": "application/vnd.github.v3+json"}
+    headers = {"User-Agent": "test-selector/1.0", "Accept": accept}
     if github_token:
         headers["Authorization"] = f"Bearer {github_token}"
     return urllib.request.Request(url, headers=headers)
@@ -118,20 +118,20 @@ def fetch_pr_diff(pr_spec: str) -> tuple[str, Callable[[str], str]]:
 
     # 2) 下载 diff：直连公开 .diff 端点（与 API 返回的 diff_url 相同，
     #    但不占 REST API 配额，限流时仍可用）
-    diff_url = f"https://github.com/{repo}/pull/{pr_num}.diff"
+    #diff_url = f"https://github.com/{repo}/pull/{pr_num}.diff"
+    diff_url = f"https://api.github.com/repos/{repo}/pulls/{pr_num}"
     for attempt in range(1, max_retries + 1):
-        print(f"  Attempt {attempt}/{max_retries} to get PR diff via .diff endpoint...")
+        print(f"  Attempt {attempt}/{max_retries} to get PR diff via GitHub API (diff media type)...")
         try:
-            # 二进制模式避免行尾转换；.diff 是公开网页端点，
-            # 带认证头（fine-grained PAT 的 Bearer）会被拒 503，故不传 token
-            req = _github_request(diff_url, None)
+            # 二进制模式避免行尾转换；API diff media type返回text/plain，
+            req = _github_request(diff_url, github_token, accept="application/vnd.github.v3.diff")
             with urllib.request.urlopen(req, timeout=60, context=ssl_context) as response:
                 diff_bytes = response.read()
             if not diff_bytes:
                 raise Exception("PR diff is empty")
             with open(diff_file, "wb") as f:
                 f.write(diff_bytes)
-            print("  Using .diff endpoint to get diff")
+            print("  Using GitHub API diff media type to get diff")
             break
         except Exception as e:
             print(f"  Attempt {attempt} failed: {e}")
@@ -145,8 +145,9 @@ def fetch_pr_diff(pr_spec: str) -> tuple[str, Callable[[str], str]]:
     def _fetch_base_content(path: str) -> str:
         """获取 base（变更前）文件内容，用于 ast 分类。
 
-        仅走 contents API 单路获取；失败即退出，不允许降级：
+        contents API 单路获取；失败即退出，不允许降级：
         base 内容缺失会导致 AST 分类退化（候选对两侧计入），精度无法保证。
+        大于1M文件时自动改用 git blob API 获取内容（base64编码）
         """
         content_url = f"https://api.github.com/repos/{repo}/contents/{urllib.parse.quote(path)}?ref={base_sha}"
         for attempt in range(1, max_retries + 1):
@@ -154,9 +155,19 @@ def fetch_pr_diff(pr_spec: str) -> tuple[str, Callable[[str], str]]:
                 req = _github_request(content_url, github_token)
                 with urllib.request.urlopen(req, timeout=30, context=ssl_context) as response:
                     data = json.loads(response.read().decode())
-                if data.get("encoding") != "base64":
-                    raise ValueError(f"unexpected content encoding: {data.get('encoding')!r}")
-                return base64.b64decode(data["content"]).decode("utf-8")
+                if data.get("encoding") == "base64":
+                    #常规文件：content API直接返回base64编码内容
+                    return base64.b64decode(data["content"]).decode("utf-8")
+                blob_sha = data.get("sha")
+                if not blob_sha:
+                    raise ValueError(f"unexpected response: {data.get("encoding")!r}")
+                blob_url = f"https://api.github.com/repos/{repo}/git/blobs/{blob_sha}"
+                req = _github_request(blob_url, github_token)
+                with urllib.request.urlopen(req, timeout=60, context=ssl_context) as response:
+                    blob = json.loads(response.read().decode())
+                if blob.get("encoding") != "base64" or not blob.get("content"):
+                    raise ValueError(f"unexpected git blob encoding: {blob.get('encoding')!r}")
+                return base64.b64decode(blob["content"]).decode("utf-8")
             except Exception as e:
                 print(f"  Attempt {attempt}/{max_retries} to fetch base content for {path} failed: {e}")
                 if attempt < max_retries:
