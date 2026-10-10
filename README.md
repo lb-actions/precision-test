@@ -143,6 +143,13 @@ flow, upload the map, and reset the append table (the tar carries the full test
 set, so the incremental table restarts from empty). Any upload failure fails
 the step — no silent data loss. Requires `permissions: id-token: write`.
 
+The tar is extracted to `<workspace>/coverage-extract/` and its layout is
+auto-discovered via the repo adapter rules (test-case dirs holding coverage
+files, plus the bundled `covstub/` source tree when present), so the tar can
+use either a packaged layout (`<pkg>/{covstub, <run>/<test-case-dirs>}`) or a
+flat one. The discovered directories are exported as `PRECISION_COVERAGE_DIR`
+and `PRECISION_SOURCE_DIR` environment variables for subsequent steps.
+
 ```yaml
 - name: Upload coverage and rebuild map
   uses: lb-actions/precision-test@v1.0.0

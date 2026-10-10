@@ -58,7 +58,11 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
  * - Coverage upload mode (coverage-tar-path): upload the full coverage tar,
  *   rebuild the test case map from it, upload the map, and reset the append
  *   table (the tar contains the full test set, so the incremental table
- *   restarts from empty).
+ *   restarts from empty). The tar is extracted to `<workspace>/coverage-extract`
+ *   and its layout is auto-discovered via the repo adapter (coverage root =
+ *   common parent of the test-case dirs; source dir = the bundled covstub).
+ *   The discovered dirs are exported as PRECISION_COVERAGE_DIR /
+ *   PRECISION_SOURCE_DIR for subsequent workflow steps.
  * - Append-on-merge (append-on-merge): extract the PR's new test cases and
  *   append them to the single append-table object on OBS (accumulate in place).
  * - Recommendation merge (enable-append-table): download the append table and
@@ -119,6 +123,26 @@ async function execWithTimeout(commandLine, args, options, timeoutMs) {
         }, timeoutMs);
         exec
             .exec(commandLine, args, options)
+            .then((result) => {
+            clearTimeout(timer);
+            resolve(result);
+        })
+            .catch((error) => {
+            clearTimeout(timer);
+            reject(error);
+        });
+    });
+}
+/**
+ * Execute a command with timeout and capture its stdout/stderr.
+ */
+async function execCaptureWithTimeout(commandLine, args, options, timeoutMs) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error(`Command timed out after ${timeoutMs / 1000} seconds`));
+        }, timeoutMs);
+        exec
+            .getExecOutput(commandLine, args, options)
             .then((result) => {
             clearTimeout(timer);
             resolve(result);
@@ -330,6 +354,66 @@ async function extractTar(tarPath, destDir, pythonBin) {
     fs.writeFileSync(scriptFile, script, "utf-8");
     try {
         await execWithTimeout(pythonBin, [scriptFile], { silent: true }, 120000);
+    }
+    finally {
+        fs.unlinkSync(scriptFile);
+    }
+}
+/**
+ * Discover the layout inside an extracted coverage tar using the repo adapter
+ * rules (stdlib-only import, no venv needed):
+ * - test-case dirs: adapter.is_test_case_dir(name) AND containing coverage
+ *   files (same criteria as CoverageSelector.scan_test_cases)
+ * - coverageRoot: common parent of all test-case dirs — relative paths from
+ *   this root become the map keys (e.g. "tests__e2e__foo" -> "tests/e2e/foo.py"),
+ *   so passing the tar root directly would corrupt the keys with extra prefixes
+ * - sourceDir: first "covstub" dir found (the bundled source tree)
+ */
+async function discoverTarLayout(extractDir, repo) {
+    const distDir = path.resolve(__dirname);
+    const script = [
+        "import glob as globmod, json, os",
+        "from test_selector.repos import get_adapter",
+        `adapter = get_adapter(${JSON.stringify(repo)})`,
+        `root = os.path.realpath(${JSON.stringify(extractDir)})`,
+        "test_dirs, covstub = [], None",
+        "def has_cov_files(d):",
+        "    pat = adapter.coverage_file_glob",
+        "    if globmod.glob(os.path.join(d, pat)):",
+        "        return True",
+        "    cd = os.path.join(d, 'covdata')",
+        "    return os.path.isdir(cd) and bool(globmod.glob(os.path.join(cd, pat)))",
+        "for dirpath, dirnames, _ in os.walk(root):",
+        "    dirnames[:] = sorted(d for d in dirnames if d != '__pycache__' and not d.startswith('.'))",
+        "    if covstub is None and 'covstub' in dirnames:",
+        "        covstub = os.path.join(dirpath, 'covstub')",
+        "    for name in dirnames:",
+        "        d = os.path.join(dirpath, name)",
+        "        if adapter.is_test_case_dir(name) and has_cov_files(d):",
+        "            test_dirs.append(d)",
+        "if not test_dirs:",
+        "    coverage_root = root",
+        "else:",
+        "    common = os.path.dirname(test_dirs[0])",
+        "    for d in test_dirs[1:]:",
+        "        while not d.startswith(common + os.sep):",
+        "            common = os.path.dirname(common)",
+        "    coverage_root = common",
+        "print(json.dumps({'coverage_root': coverage_root, 'source_dir': covstub, 'test_case_count': len(test_dirs)}))",
+    ].join("\n");
+    const scriptFile = path.join(os.tmpdir(), `precision_discover_${process.pid}.py`);
+    fs.writeFileSync(scriptFile, script, "utf-8");
+    try {
+        const result = await execCaptureWithTimeout("python3", [scriptFile], { silent: true, env: { ...process.env, PYTHONPATH: distDir } }, 120000);
+        if (result.exitCode !== 0) {
+            throw new Error(`tar layout discovery failed (exit ${result.exitCode}): ${result.stderr.trim()}`);
+        }
+        const parsed = JSON.parse(result.stdout.trim().split("\n").pop() || "{}");
+        return {
+            coverageRoot: String(parsed.coverage_root || extractDir),
+            sourceDir: parsed.source_dir ? String(parsed.source_dir) : null,
+            testCaseCount: Number(parsed.test_case_count || 0),
+        };
     }
     finally {
         fs.unlinkSync(scriptFile);
@@ -553,6 +637,9 @@ async function run() {
         // Upload the full coverage tar, rebuild the map from it, upload the map,
         // and reset the append table. Any failure is fatal (no silent data loss).
         let coverageTarHandled = false;
+        // Source dir that later steps in this run should use: overridden with the
+        // covstub bundled in the tar (the workspace default may not exist).
+        let effectiveSourceDir = validatedSourceDir;
         if (coverageTarRaw && obs) {
             core.startGroup("Step 3: Upload coverage tar and rebuild map");
             const tarPath = validatePath(coverageTarRaw, "coverage-tar-path");
@@ -572,31 +659,42 @@ async function run() {
             console.log(`Uploading ${tarPath} to ${obs.bucketName}/${tarKey}...`);
             await obsPutObject(obs, tarKey, tarData);
             console.log(`Coverage tar uploaded: ${tarKey} (overwrote previous copy)`);
-            // A2. Extract the tar and rebuild the map with the existing Python flow.
-            const extractDir = path.join(os.tmpdir(), `precision_coverage_${process.pid}`);
+            // A2. Extract the tar into a persistent workspace directory (subsequent
+            // workflow steps may reuse the bundled covstub) and discover the layout.
+            const extractDir = path.join(process.cwd(), "coverage-extract");
+            fs.rmSync(extractDir, { recursive: true, force: true });
             fs.mkdirSync(extractDir, { recursive: true });
-            try {
-                console.log(`Extracting tar to ${extractDir}...`);
-                await extractTar(tarPath, extractDir, "python3");
-                console.log("Rebuilding test case map from extracted coverage data...");
-                await runPrecisionTest({
-                    repo,
-                    githubPr: "",
-                    gitcodePr: "",
-                    sourceDir: validatedSourceDir,
-                    mapFile: validatedMapFile,
-                    coverageDir: extractDir,
-                    buildMap: true,
-                    minAffected,
-                    dedup,
-                    enableLineMatch,
-                    enableFunctionMatch,
-                    skipImports,
-                });
+            console.log(`Extracting tar to ${extractDir}...`);
+            await extractTar(tarPath, extractDir, "python3");
+            console.log("Discovering tar layout (coverage root / bundled source dir)...");
+            const layout = await discoverTarLayout(extractDir, repo);
+            const mapCoverageDir = layout.coverageRoot || extractDir;
+            const mapSourceDir = layout.sourceDir || validatedSourceDir;
+            console.log(`  Coverage root: ${mapCoverageDir} (${layout.testCaseCount} test case dir(s))`);
+            console.log(`  Source dir: ${mapSourceDir}${layout.sourceDir ? " (bundled in tar)" : " (from source-dir input)"}`);
+            if (layout.testCaseCount === 0) {
+                core.warning(`No test case directories found inside the tar for repo '${repo}'; ` +
+                    `the generated map will be empty — check the repo setting or the tar structure`);
             }
-            finally {
-                fs.rmSync(extractDir, { recursive: true, force: true });
-            }
+            // Export for subsequent workflow steps (two-step usage pattern).
+            core.exportVariable("PRECISION_COVERAGE_DIR", mapCoverageDir);
+            core.exportVariable("PRECISION_SOURCE_DIR", mapSourceDir);
+            effectiveSourceDir = mapSourceDir;
+            console.log("Rebuilding test case map from extracted coverage data...");
+            await runPrecisionTest({
+                repo,
+                githubPr: "",
+                gitcodePr: "",
+                sourceDir: mapSourceDir,
+                mapFile: validatedMapFile,
+                coverageDir: mapCoverageDir,
+                buildMap: true,
+                minAffected,
+                dedup,
+                enableLineMatch,
+                enableFunctionMatch,
+                skipImports,
+            });
             // A3. Upload the freshly built map (fixed key, single copy).
             if (!fs.existsSync(validatedMapFile)) {
                 throw new Error(`map file not generated at: ${validatedMapFile}`);
@@ -633,7 +731,9 @@ async function run() {
                 repo,
                 githubPr,
                 gitcodePr,
-                sourceDir: validatedSourceDir,
+                // When the coverage tar was just uploaded, use the source dir bundled
+                // in the tar (the workspace default may not exist in upload-only jobs).
+                sourceDir: effectiveSourceDir,
                 mapFile: validatedMapFile,
                 coverageDir: validatedCoverageDir,
                 // When the coverage tar was just uploaded, the freshly built map file
