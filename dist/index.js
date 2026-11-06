@@ -824,10 +824,15 @@ async function run() {
             coverageTarHandled = true;
             core.endGroup();
         }
-        // ===== Precision test selection (always runs when a PR is provided) =====
+        // ===== Precision test selection =====
+        // Runs when a PR is provided, or when build-map was requested standalone
+        // (no PR): the Python CLI then builds the map and exits (its --build-map
+        // mode without --github-pr/--gitcode-pr skips selection). Skipped when the
+        // coverage tar upload just rebuilt the map (avoid double work).
         let selectedTests = [];
         let newTestsFile = null;
-        if (githubPr || gitcodePr) {
+        const runStandaloneBuildMap = buildMap && !coverageTarHandled && !githubPr && !gitcodePr;
+        if (githubPr || gitcodePr || runStandaloneBuildMap) {
             core.startGroup("Step 4: Execute precision test selector");
             if (appendOnMerge) {
                 newTestsFile = path.join(os.tmpdir(), `precision_new_tests_${process.pid}.txt`);
