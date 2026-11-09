@@ -70,9 +70,11 @@ https.request = function (this: typeof https, ...args: unknown[]) {
 /**
  * Security: Python subprocess execution timeout in seconds (prevents DoS).
  * Can be overridden via PYTHON_EXEC_TIMEOUT_SECONDS environment variable.
+ * Default 5400s (90 min): real-world sglang map builds with merged coverage
+ * from multiple attempts take 35-50 min; the old 600s default aborted them.
  */
 const PYTHON_EXEC_TIMEOUT_SECONDS = parseInt(
-  process.env.PYTHON_EXEC_TIMEOUT_SECONDS || "600",
+  process.env.PYTHON_EXEC_TIMEOUT_SECONDS || "5400",
   10,
 );
 
