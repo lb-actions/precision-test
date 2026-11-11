@@ -4,7 +4,7 @@ author: 'openlibing'
 
 inputs:
   repo:
-    description: 'Repository adapter: vllm_ascend / sglang / pytorch (default: vllm_ascend)'
+    description: 'Repository adapter: vllm_ascend / sglang / sglang-kernel / pytorch (default: vllm_ascend)'
     required: false
     default: 'vllm_ascend'
   github-pr:
