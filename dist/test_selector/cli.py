@@ -94,6 +94,11 @@ def build_parser(adapter, default_repo: str) -> argparse.ArgumentParser:
         "--new-tests-output",
         help="Write the new test files extracted from the PR diff to this file (one per line, for the append-table workflow)",
     )
+    parser.add_argument(
+        "--output", "-o",
+        default=None,
+        help="Output file path for the recommended test list (default: <package-parent>/recommended_pytest_paths.txt)",
+    )
     return parser
 
 
@@ -311,8 +316,8 @@ def main(argv=None, default_repo: str = "vllm_ascend") -> None:
     else:
         print("\n=== No Test Cases Recommended ===")
 
-    # Always write output file (even if empty), next to the repo root
-    output_file = BASE_DIR / "recommended_pytest_paths.txt"
+    # Always write output file (even if empty); --output wins, default is next to the repo root
+    output_file = Path(args.output) if args.output else BASE_DIR / "recommended_pytest_paths.txt"
     with open(output_file, "w", encoding="utf-8") as f:
         for test_name in test_names:
             f.write(test_name + "\n")

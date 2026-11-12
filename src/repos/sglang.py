@@ -18,6 +18,9 @@ class SglangAdapter(RepoAdapter):
     repo_name = "sglang"
     product_code_prefix = "python/sglang/"
 
+    #: 参数化用例（...[param_id]）保留后缀作为独立条目，不合并为无参数条目
+    merge_parametrized_cases = False
+
     #: 可纳入 PR 检测的测试根目录
     TEST_ROOTS = ("test/registered/", "test/unit/", "test/e2e/", "test/integration/", "python/sglang/multimodal_gen/test/")
 

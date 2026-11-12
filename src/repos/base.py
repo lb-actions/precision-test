@@ -24,6 +24,9 @@ class RepoAdapter(ABC):
     #: 默认 "coverage*" 兼容 pytest-cov 裸文件（pytorch: coverage）与原始格式
     #: 带后缀文件（vllm/sglang: coverage.linux-...-workflow.xxx）。
     coverage_file_glob: str = "coverage*"
+    #: 参数化用例（...[param_id]）是否合并为无参数条目。
+    #: True 时入参实例共享同一函数代码，推荐粒度是函数；False 时保留参数化实例为独立条目
+    merge_parametrized_cases: bool = True
 
     # ------------------------------------------------------------------
     # 覆盖率数据处理

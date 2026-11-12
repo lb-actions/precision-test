@@ -172,8 +172,9 @@ class CoverageSelector:
                                 file_lines_map[filename].update(lines)
 
             normalized_name = self.normalize_test_name(test_case)
-            # 参数化用例（...[param_id]）合并为无参数条目：入参实例共享同一函数代码，推荐粒度是函数
-            base_name = normalized_name.split("[", 1)[0]
+            # 参数化用例（...[param_id]）默认合并为无参数条目：入参实例共享同一函数代码，推荐粒度是函数；
+            # adapter 关闭合并时保留参数化实例为独立条目
+            base_name = normalized_name.split("[", 1)[0] if self.adapter.merge_parametrized_cases else normalized_name
             entry = self.test_case_map.get(base_name)
             if entry is None:
                 self.test_case_map[base_name] = {
