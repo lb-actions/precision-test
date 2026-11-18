@@ -83,9 +83,10 @@ jobs:
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `repo` | Repository adapter: `vllm_ascend` / `sglang` / `pytorch` | No | `vllm_ascend` |
-| `github-pr` | GitHub PR (vllm_ascend / sglang / pytorch), format: `owner/repo#pr_number` or just `pr_number`; pytorch uses upstream `pytorch/pytorch#N` | No | - |
+| `repo` | Repository adapter: `vllm_ascend` / `sglang` / `sglang-kernel` / `pytorch` / `msmodeling` / `msmodelslim` / `transformer_engine` | No | `vllm_ascend` |
+| `github-pr` | GitHub PR (vllm_ascend / sglang / sglang-kernel / pytorch / msmodeling / msmodelslim / transformer_engine), format: `owner/repo#pr_number` or just `pr_number`; pytorch uses upstream `pytorch/pytorch#N` | No | - |
 | `gitcode-pr` | GitCode PR (public fallback module, currently unused by default adapters), format: `owner/repo#pr_number`; mutually exclusive with `github-pr` | No | - |
+| `operator-repo-root` | sgl-kernel-npu repository root for real-time csrc operator mapping (contains `csrc/`, `python/sgl_kernel_npu/`, `tests/python/`). Required only when `repo` is `sglang-kernel` and the PR contains non-Markdown `csrc/` changes | No | - |
 | `source-dir` | Source code directory | No | `covstub` |
 | `map-file` | Test case map file | No | `test_case_map.json` |
 | `coverage-dir` | Coverage data directory (required only when building the map) | No | `coverage` |
@@ -104,6 +105,32 @@ jobs:
 > Fine-grained matching toggles (`min-affected`, `dedup`, `enable-line-match`,
 > `enable-function-match`, `skip-imports`) still exist in `action.yml`; they are
 > omitted here and generally safe to leave at their defaults.
+
+### csrc operator mapping (sglang-kernel only)
+
+sglang-kernel's `csrc/` tree contains CANN operator native code (C++/Ascend C)
+that is invisible to the Python coverage data, so line/function-level matching
+cannot recall tests for it. When `repo` is `sglang-kernel` and the PR diff
+contains non-Markdown `csrc/` changes, the selector builds an in-memory static
+mapping in real time and merges the matched tests into the recommendation:
+
+```
+non-Markdown csrc/ files in the PR diff
+  → scan the checkout passed via operator-repo-root
+  → directory-to-operator attribution (TORCH_LIBRARY registrations)
+  → Python call-graph closure (torch.ops.npu.*)
+  → test import attribution (tests/python/**)
+  → matched tests merged into the final recommendation
+```
+
+- The mapping is rebuilt in memory on every recommendation run — no
+  `operator_map.json` is written or read, so it never goes stale.
+- The scan only triggers when non-Markdown `csrc/` files changed; pure `.md`
+  changes do not require `operator-repo-root`.
+- Non-Markdown `csrc/` changes without `operator-repo-root` fail the run
+  (instead of silently under-selecting).
+- csrc files with no operator attribution (build scripts, `.clang-format`,
+  unreferenced public headers) are marked INFRA and recommend no tests.
 
 ## Outputs
 

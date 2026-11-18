@@ -565,6 +565,7 @@ interface SelectorParams {
   enableFunctionMatch: boolean;
   skipImports: boolean;
   newTestsOutput?: string;
+  operatorRepoRoot?: string;
 }
 
 interface SelectorResult {
@@ -634,6 +635,9 @@ async function runPrecisionTest(params: SelectorParams): Promise<SelectorResult>
     if (params.newTestsOutput) {
       args.push("--new-tests-output", params.newTestsOutput);
     }
+    if (params.operatorRepoRoot) {
+      args.push("--operator-repo-root", params.operatorRepoRoot);
+    }
     // Make dist/ importable so `python -m test_selector` finds the package.
     const env = {
       ...process.env,
@@ -698,6 +702,7 @@ async function run(): Promise<void> {
     const enableFunctionMatch =
       core.getInput("enable-function-match", { required: false }) !== "false";
     const skipImports = core.getInput("skip-imports", { required: false }) === "true";
+    const operatorRepoRootRaw = core.getInput("operator-repo-root", { required: false });
 
     // Coverage upload / append table inputs.
     const coverageTarRaw = core.getInput("coverage-tar-path", { required: false });
@@ -729,6 +734,7 @@ async function run(): Promise<void> {
     console.log(`  - enable-line-match: ${enableLineMatch}`);
     console.log(`  - enable-function-match: ${enableFunctionMatch}`);
     console.log(`  - skip-imports: ${skipImports}`);
+    console.log(`  - operator-repo-root: ${operatorRepoRootRaw || "(not set)"}`);
     console.log(`  - coverage-tar-path: ${coverageTarRaw || "(not set, upload skipped)"}`);
     console.log(`  - download-coverage: ${downloadCoverage}`);
     console.log(`  - append-on-merge: ${appendOnMerge}`);
@@ -779,6 +785,14 @@ async function run(): Promise<void> {
     console.log(`Validated source-dir: ${validatedSourceDir}`);
     console.log(`Validated coverage-dir: ${validatedCoverageDir}`);
     console.log(`Validated map-file: ${validatedMapFile}`);
+    let validatedOperatorRepoRoot: string | undefined;
+    if (operatorRepoRootRaw) {
+      validatedOperatorRepoRoot = validatePath(operatorRepoRootRaw, "operator-repo-root");
+      if (!fs.existsSync(validatedOperatorRepoRoot)) {
+        throw new Error(`operator-repo-root does not exist: ${validatedOperatorRepoRoot}`);
+      }
+      console.log(`Validated operator-repo-root: ${validatedOperatorRepoRoot}`);
+    }
     core.endGroup();
 
     // Resolve the OBS context once for all optional features.
@@ -985,6 +999,7 @@ async function run(): Promise<void> {
         enableFunctionMatch,
         skipImports,
         newTestsOutput: newTestsFile || undefined,
+        operatorRepoRoot: validatedOperatorRepoRoot,
       });
       selectedTests = fs.existsSync(result.testListFile)
         ? fs

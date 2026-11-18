@@ -79,51 +79,66 @@ class CoverageSelector:
         """将测试用例目录名转换为标准脚本名（委托仓库适配器）。"""
         return self.adapter.normalize_test_name(test_name)
 
-    def get_covered_lines_from_file(self, cov_file: str, filename: str) -> set[int]:
-        """
-        从单个覆盖率 SQLite 文件获取某个文件的覆盖行号。
-        """
-        lines = set()
+    def get_covered_lines_from_file(self, cov_file: str) -> dict[str, set[int]]:
+        """单连接批量读取覆盖率文件，返回仓库相对路径到覆盖行的映射。"""
+        files = defaultdict(set)
+        covered_lines = {}
         try:
             conn = sqlite3.connect(_long_path(cov_file))
             cursor = conn.cursor()
-
-            # 模糊路径匹配查找文件 ID
-            cursor.execute("SELECT id FROM file WHERE path LIKE ?", (f"%{filename}",))
-            row = cursor.fetchone()
-            if not row:
-                conn.close()
-                return lines
-            file_id = row[0]
-
-            # 获取所有 arc，计算覆盖行号
-            cursor.execute("SELECT DISTINCT fromno, tono FROM arc WHERE file_id = ?", (file_id,))
-            for fromno, tono in cursor.fetchall():
-                if fromno > 0:
-                    lines.add(fromno)
-                if tono > 0:
-                    lines.add(tono)
-
-            conn.close()
-        except Exception as e:
-            print(f"  Warning: Error reading {cov_file}: {e}")
-        return lines
-
-    def get_covered_files_from_file(self, cov_file: str) -> set[str]:
-        """从单个覆盖率文件获取所有覆盖的产品代码文件（相对路径，委托仓库适配器）。"""
-        files = set()
-        try:
-            conn = sqlite3.connect(_long_path(cov_file))
-            cursor = conn.cursor()
-            cursor.execute("SELECT path FROM file")
-            for (path,) in cursor.fetchall():
+            cursor.execute("SELECT id, path FROM file")
+            for file_id, path in cursor.fetchall():
                 rel_path = self.adapter.covered_path_to_rel(path)
                 if rel_path is not None:
-                    files.add(rel_path)
+                    files[rel_path].add(file_id)
+
+            file_ids = sorted({file_id for ids in files.values() for file_id in ids})
+            lines_by_file_id = {file_id: set() for file_id in file_ids}
+
+            # SQLite 旧版本的查询变量上限为 999，分批保留余量。
+            batch_size = 500
+            for start in range(0, len(file_ids), batch_size):
+                batch = file_ids[start:start + batch_size]
+                placeholders = ",".join("?" for _ in batch)
+                cursor.execute(
+                    f"SELECT file_id, fromno, tono FROM arc WHERE file_id IN ({placeholders})",
+                    batch,
+                )
+                for file_id, fromno, tono in cursor:
+                    if fromno > 0:
+                        lines_by_file_id[file_id].add(fromno)
+                    if tono > 0:
+                        lines_by_file_id[file_id].add(tono)
+
+            # 回退：coverage.py v7.x 纯行覆盖模式（has_arcs=0）时 arc 表为空，
+            # 行号存于 line_bits 位图（numbits：字节 k 的第 i 位 = 行 k*8+i+1）
+            empty_file_ids = [file_id for file_id in file_ids if not lines_by_file_id[file_id]]
+            try:
+                for start in range(0, len(empty_file_ids), batch_size):
+                    batch = empty_file_ids[start:start + batch_size]
+                    placeholders = ",".join("?" for _ in batch)
+                    cursor.execute(
+                        f"SELECT file_id, numbits FROM line_bits WHERE file_id IN ({placeholders})",
+                        batch,
+                    )
+                    for file_id, numbits in cursor:
+                        for byte_i, byte in enumerate(numbits):
+                            for bit_i in range(8):
+                                if byte & (1 << bit_i):
+                                    lines_by_file_id[file_id].add(byte_i * 8 + bit_i + 1)
+            except sqlite3.OperationalError:
+                pass  # 旧 schema 无 line_bits 表
+
+            for rel_path, ids in files.items():
+                lines = set()
+                for file_id in ids:
+                    lines.update(lines_by_file_id[file_id])
+                if lines:
+                    covered_lines[rel_path] = lines
             conn.close()
         except Exception as e:
             print(f"  Warning: Error reading {cov_file}: {e}")
-        return files
+        return covered_lines
 
     def _resolve_source_file(self, filename: str) -> Path | None:
         """
@@ -157,19 +172,17 @@ class CoverageSelector:
 
             for cov_dir in cov_dirs:
                 for cov_file in cov_dir.glob(self.adapter.coverage_file_glob):
-                    covered_files = self.get_covered_files_from_file(str(cov_file))
+                    covered_lines = self.get_covered_lines_from_file(str(cov_file))
 
-                    for filename in covered_files:
-                        lines = self.get_covered_lines_from_file(str(cov_file), filename)
+                    for filename, lines in covered_lines.items():
+                        # source_dir 可用时过滤噪音行
+                        if self.source_dir:
+                            source_file = self._resolve_source_file(filename)
+                            if source_file and source_file.exists():
+                                lines = self._noise_filter.filter_noise_lines(str(source_file), lines)
+                        # 过滤后无覆盖则跳过
                         if lines:
-                            # source_dir 可用时过滤噪音行
-                            if self.source_dir:
-                                source_file = self._resolve_source_file(filename)
-                                if source_file and source_file.exists():
-                                    lines = self._noise_filter.filter_noise_lines(str(source_file), lines)
-                            # 过滤后无覆盖则跳过
-                            if lines:
-                                file_lines_map[filename].update(lines)
+                            file_lines_map[filename].update(lines)
 
             normalized_name = self.normalize_test_name(test_case)
             # 参数化用例（...[param_id]）默认合并为无参数条目：入参实例共享同一函数代码，推荐粒度是函数；

@@ -49,6 +49,9 @@ inputs:
     description: 'Skip import statement lines (only effective for function-level matching)'
     required: false
     default: 'false'
+  operator-repo-root:
+    description: 'sgl-kernel-npu repository root for real-time csrc operator mapping (contains csrc/, python/sgl_kernel_npu/, tests/python/). Required only when repo=sglang-kernel and the PR contains non-Markdown csrc/ changes'
+    required: false
   coverage-tar-path:
     description: 'Coverage tar package path; when provided: upload to OBS, rebuild test case map from it, upload the map and reset the append table'
     required: false
