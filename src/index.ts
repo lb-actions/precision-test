@@ -158,6 +158,33 @@ async function execCaptureWithTimeout(
 }
 
 /**
+ * Repository adapter identifier pattern for the test_selector CLI --repo flag.
+ * New adapters are added in the bundled test_selector Python package; the
+ * action only enforces a generic identifier format so adapter updates work
+ * without any change on the action side.
+ */
+const REPO_ADAPTER_PATTERN = /^[a-zA-Z0-9_-]{1,100}$/;
+
+/**
+ * Validate repository adapter name. Accepts any adapter identifier supported
+ * by the bundled test_selector package; only enforces a generic identifier
+ * format (letters, numbers, underscores, hyphens). Unknown identifiers fail
+ * inside the Python package with the authoritative adapter list.
+ */
+function validateRepoName(repo: string, paramName: string): string {
+  if (!repo || repo.trim() === "") {
+    throw new Error(`${paramName} cannot be empty`);
+  }
+  const trimmed = repo.trim();
+  if (!REPO_ADAPTER_PATTERN.test(trimmed)) {
+    throw new Error(
+      `${paramName} must be a valid adapter identifier (1-100 chars: letters, numbers, underscores, hyphens). Got: ${trimmed}`,
+    );
+  }
+  return trimmed;
+}
+
+/**
  * Validate a path for security: non-empty and free of traversal characters.
  */
 function validatePath(inputPath: string, paramName: string): string {
@@ -285,7 +312,8 @@ function validateOidcConfig(jsonStr: string): Record<string, unknown> {
 
 /**
  * Create an OBS client using OIDC temporary credentials.
- * Empty oidcConfig keeps the SDK built-in defaults (openlibing account).
+ * oidcConfig is caller-provided and validated; empty config never reaches
+ * OBS-backed features because the action fails fast on missing oidc-config.
  */
 async function createObsClient(oidcConfig: Record<string, unknown>): Promise<{
   client: typeof ObsClient;
@@ -685,7 +713,8 @@ async function run(): Promise<void> {
 
     // Get input parameters.
     core.startGroup("Step 1: Get input parameters");
-    const repo = core.getInput("repo", { required: false }) || "vllm_ascend";
+    const repoInput = core.getInput("repo", { required: false });
+    const repo = validateRepoName(repoInput || "vllm_ascend", "repo");
     const githubPr = core.getInput("github-pr", { required: false });
     const gitcodePr = core.getInput("gitcode-pr", { required: false });
     const sourceDir = core.getInput("source-dir", { required: false }) || "covstub";
@@ -709,12 +738,14 @@ async function run(): Promise<void> {
     const downloadCoverage = core.getInput("download-coverage", { required: false }) === "true";
     const projectNameRaw = core.getInput("project-name", { required: false });
     const chipTypeRaw = core.getInput("chip-type", { required: false }) || "Ascend";
-    const obsBucketRaw = core.getInput("obs-bucket-name", { required: false }) || "op-case-result";
+    const obsBucketRaw = core.getInput("obs-bucket-name", { required: false });
     const oidcConfig = validateOidcConfig(core.getInput("oidc-config", { required: false }));
 
     // sglang never uses the append table (its adapters keep full data daily).
     let appendOnMerge = core.getInput("append-on-merge", { required: false }) === "true";
-    let enableAppendTable = core.getInput("enable-append-table", { required: false }) !== "false";
+    // Default false: OBS-backed merge requires caller-provided bucket + OIDC
+    // config, and new adapters must not silently depend on OBS features.
+    let enableAppendTable = core.getInput("enable-append-table", { required: false }) === "true";
     if (repo === "sglang" && (appendOnMerge || enableAppendTable)) {
       console.log("  - sglang: append table features disabled");
       appendOnMerge = false;
@@ -798,6 +829,20 @@ async function run(): Promise<void> {
     // Resolve the OBS context once for all optional features.
     let obs: ObsContext | null = null;
     if (coverageTarRaw || appendOnMerge || enableAppendTable || downloadCoverage) {
+      // No default bucket or account: OBS-backed features require the caller
+      // to provide both, so business repos never depend on a shared account.
+      if (!obsBucketRaw || obsBucketRaw.trim() === "") {
+        throw new Error(
+          "obs-bucket-name is required when coverage-tar-path / download-coverage / " +
+            "append-on-merge / enable-append-table is used; no default bucket is provided",
+        );
+      }
+      if (Object.keys(oidcConfig).length === 0) {
+        throw new Error(
+          "oidc-config is required when coverage-tar-path / download-coverage / " +
+            "append-on-merge / enable-append-table is used; no default OBS account is provided",
+        );
+      }
       let projectName = projectNameRaw;
       if (!projectName) {
         const repository = process.env.ATOMGIT_REPOSITORY || process.env.GITHUB_REPOSITORY || "";

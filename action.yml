@@ -4,14 +4,14 @@ author: 'openlibing'
 
 inputs:
   repo:
-    description: 'Repository adapter: vllm_ascend / sglang / sglang-kernel / pytorch (default: vllm_ascend)'
+    description: 'Repository adapter identifier consumed by the bundled test_selector package (e.g. vllm_ascend / sglang / sglang-kernel / pytorch / torch_npu). Any adapter identifier supported by the bundled package is accepted (default: vllm_ascend); adapting a new repository only requires a test_selector update, no action change'
     required: false
     default: 'vllm_ascend'
   github-pr:
-    description: 'GitHub PR, format: owner/repo#pr_number (for vllm_ascend / sglang / pytorch; pytorch uses upstream pytorch/pytorch#N)'
+    description: 'GitHub PR, format: owner/repo#pr_number (for vllm_ascend / sglang / sglang-kernel / pytorch; pytorch uses upstream pytorch/pytorch#N)'
     required: false
   gitcode-pr:
-    description: 'GitCode PR, format: owner/repo#pr_number (public fallback module, currently unused by default adapters); mutually exclusive with github-pr'
+    description: 'GitCode PR, format: owner/repo#pr_number (used by torch_npu for Ascend/pytorch); mutually exclusive with github-pr'
     required: false
   source-dir:
     description: 'Source code directory (default: covstub)'
@@ -64,9 +64,9 @@ inputs:
     required: false
     default: 'false'
   enable-append-table:
-    description: 'Merge the OBS append table into the recommended test list (default: true). Ignored for sglang'
+    description: 'Merge the OBS append table into the recommended test list (default: false). Requires obs-bucket-name and oidc-config. Ignored for sglang'
     required: false
-    default: 'true'
+    default: 'false'
   project-name:
     description: 'Project name segment of the OBS path (e.g. MindIE-LLM, vllm-ascend); defaults to the current repository name'
     required: false
@@ -75,11 +75,10 @@ inputs:
     required: false
     default: 'Ascend'
   obs-bucket-name:
-    description: 'OBS bucket for coverage tar / map / append table (default: op-case-result)'
+    description: 'OBS bucket for coverage tar / map / append table. Required when any OBS-backed feature is used (coverage-tar-path / download-coverage / append-on-merge / enable-append-table); no default bucket'
     required: false
-    default: 'op-case-result'
   oidc-config:
-    description: 'OIDC client config JSON for a custom OBS account (e.g. {"accountId":"...","region":"cn-southwest-2"}); empty = default openlibing account'
+    description: 'OIDC client config JSON for the OBS account, provided by the business side (e.g. {"accountId":"...","region":"cn-southwest-2"}). Required when any OBS-backed feature is used; no default account'
     required: false
 
 outputs:
