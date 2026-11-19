@@ -1,11 +1,12 @@
 """仓库适配器注册表：按仓库名获取对应适配器实例。"""
 
+from .ascend_pytorch import AscendPytorchAdapter
 from .base import RepoAdapter
 from .msmodeling import MsmodelingAdapter
 from .msmodelslim import MsmodelslimAdapter
 from .sglang import SglangAdapter
 from .sglang_kernel import SglangKernelAdapter
-from .torch_npu import TorchNpuAdapter
+from .pytorch import PytorchAdapter
 from .transformer_engine import TransformerEngineAdapter
 from .vllm_ascend import VllmAscendAdapter
 
@@ -14,7 +15,8 @@ __all__ = [
     "VllmAscendAdapter",
     "SglangAdapter",
     "SglangKernelAdapter",
-    "TorchNpuAdapter",
+    "PytorchAdapter",
+    "AscendPytorchAdapter",
     "MsmodelingAdapter",
     "MsmodelslimAdapter",
     "TransformerEngineAdapter",
@@ -27,7 +29,8 @@ _ADAPTERS = {
     "vllm_ascend": VllmAscendAdapter,
     "sglang": SglangAdapter,
     "sglang-kernel": SglangKernelAdapter,
-    "pytorch": TorchNpuAdapter,
+    "pytorch": PytorchAdapter,
+    "torch_npu": AscendPytorchAdapter,
     "msmodeling": MsmodelingAdapter,
     "msmodelslim": MsmodelslimAdapter,
     "transformer_engine": TransformerEngineAdapter,
@@ -40,7 +43,7 @@ def get_adapter(repo_name: str) -> RepoAdapter:
     """按仓库名获取适配器实例。
 
     Args:
-        repo_name: 仓库名（vllm_ascend / sglang / sglang-kernel / pytorch /
+        repo_name: 仓库名（vllm_ascend / sglang / sglang-kernel / pytorch / torch_npu /
             msmodeling / msmodelslim / transformer_engine）
 
     Returns:

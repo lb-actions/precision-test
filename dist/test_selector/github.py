@@ -13,6 +13,7 @@ import ssl
 import subprocess
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Callable
@@ -116,22 +117,35 @@ def fetch_pr_diff(pr_spec: str) -> tuple[str, Callable[[str], str]]:
         print("  Error: failed to get PR info (base sha) after all attempts, exiting")
         exit(1)
 
-    # 2) 下载 diff：直连公开 .diff 端点（与 API 返回的 diff_url 相同，
-    #    但不占 REST API 配额，限流时仍可用）
-    #diff_url = f"https://github.com/{repo}/pull/{pr_num}.diff"
+    # 2) 下载 diff：优先 API diff media type。API 对超限 diff（总行数
+    #    >20k / 原始数据 >1MB / 文件数 >300）返回 406；406 是确定性
+    #    错误，重试无意义，此时回退 github.com 公开 .diff 端点（与
+    #    API 返回的 diff_url 相同，不受 diff 大小渲染限制，也不占
+    #    REST API 配额）
     diff_url = f"https://api.github.com/repos/{repo}/pulls/{pr_num}"
+    fallback_url = f"https://github.com/{repo}/pull/{pr_num}.diff"
     for attempt in range(1, max_retries + 1):
         print(f"  Attempt {attempt}/{max_retries} to get PR diff via GitHub API (diff media type)...")
         try:
             # 二进制模式避免行尾转换；API diff media type返回text/plain，
             req = _github_request(diff_url, github_token, accept="application/vnd.github.v3.diff")
-            with urllib.request.urlopen(req, timeout=60, context=ssl_context) as response:
-                diff_bytes = response.read()
+            try:
+                with urllib.request.urlopen(req, timeout=60, context=ssl_context) as response:
+                    diff_bytes = response.read()
+                print("  Using GitHub API diff media type to get diff")
+            except urllib.error.HTTPError as e:
+                if e.code != 406:
+                    raise
+                print("  API returned 406 (diff exceeds GitHub diff limits), "
+                      "falling back to github.com diff endpoint")
+                fallback_req = _github_request(fallback_url, github_token, accept="text/plain")
+                with urllib.request.urlopen(fallback_req, timeout=120, context=ssl_context) as response:
+                    diff_bytes = response.read()
+                print("  Using github.com fallback endpoint to get diff")
             if not diff_bytes:
                 raise Exception("PR diff is empty")
             with open(diff_file, "wb") as f:
                 f.write(diff_bytes)
-            print("  Using GitHub API diff media type to get diff")
             break
         except Exception as e:
             print(f"  Attempt {attempt} failed: {e}")

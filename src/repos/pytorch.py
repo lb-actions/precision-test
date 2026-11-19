@@ -1,4 +1,4 @@
-"""torch_npu 仓库适配器（检测上游 PyTorch：https://github.com/pytorch/pytorch）。
+"""pytorch 仓库适配器（检测上游 pytorch/pytorch：https://github.com/pytorch/pytorch）。
 
 - REPO_NAME = "torch"，产品代码前缀 "torch/"，PR 源为 GitHub（--github-pr pytorch/pytorch#N）
 - 测试用例目录：目录名含 "__" 或以 "test_" 开头（如 _inductor__test_add），
@@ -17,8 +17,8 @@ from pathlib import PurePosixPath
 from .base import RepoAdapter
 
 
-class TorchNpuAdapter(RepoAdapter):
-    """torch_npu 仓库适配器。"""
+class PytorchAdapter(RepoAdapter):
+    """pytorch（上游 pytorch/pytorch）仓库适配器。"""
 
     repo_name = "torch"
     product_code_prefix = "torch/"

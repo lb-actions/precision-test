@@ -10,10 +10,11 @@
 
 ```bash
 python -m test_selector --repo vllm_ascend --github-pr "vllm-project/vllm-ascend#12379"
-python -m test_selector --repo torch_npu --github-pr "pytorch/pytorch#150000"
+python -m test_selector --repo pytorch --github-pr "pytorch/pytorch#150000"
+python -m test_selector --repo torch_npu --gitcode-pr "Ascend/pytorch#123"
 ```
 
-> **PR 源选择**：三仓库均使用 GitHub（`--github-pr`）；torch_npu 检测上游仓库 [pytorch/pytorch](https://github.com/pytorch/pytorch)。
+> **PR 源选择**：pytorch 检测 GitHub 上游仓库 [pytorch/pytorch](https://github.com/pytorch/pytorch)（`--github-pr`）；torch_npu 检测 GitCode 上的 [Ascend/pytorch](https://gitcode.com/Ascend/pytorch)（torch_npu 本体，`--gitcode-pr`）。两者规则一致，仅产品代码前缀与 PR 源不同。
 
 **核心工作流**（main 函数结构）：
 
@@ -29,7 +30,7 @@ python -m test_selector --repo torch_npu --github-pr "pytorch/pytorch#150000"
 ├─────────────────────────────────────────────────────────────────┤
 │  动作2: 全量触发变更检测（adapter.has_full_suite_changes）         │
 │    - vllm_ascend: csrc/ 目录变更（非 .md）→ 全量测试              │
-│    - sglang / torch_npu: 恒为 False（原生代码变更不解析进精准匹配） │
+│    - sglang / pytorch / torch_npu: 恒为 False（原生代码变更不解析进精准匹配） │
 ├─────────────────────────────────────────────────────────────────┤
 │  动作3: 产品代码变更检测（change_detector）                        │
 │    - parse_pr_diff_file() → changed_files_with_lines, renames   │
@@ -57,7 +58,7 @@ python -m test_selector --repo torch_npu --github-pr "pytorch/pytorch#150000"
 
 ```
 test_selector/
-├── cli.py                 # 统一 CLI（三仓共用 main 入口）
+├── cli.py                 # 统一 CLI（各仓共用 main 入口）
 ├── __main__.py            # python -m test_selector 入口
 ├── github.py              # PR 拉取（公共）
 ├── pr_detector.py         # 检测 PR 内容：测试文件/删除文件/全量触发（规则委托 adapter）
@@ -71,7 +72,8 @@ test_selector/
     ├── base.py            #   RepoAdapter 抽象接口
     ├── vllm_ascend.py     #   vllm_ascend 适配器
     ├── sglang.py          #   sglang 适配器
-    ├── torch_npu.py     #   torch_npu（上游 PyTorch / GitHub）适配器
+    ├── pytorch.py         #   pytorch（上游 pytorch/pytorch / GitHub）适配器
+    ├── ascend_pytorch.py  #   torch_npu（Ascend/pytorch / GitCode）适配器，继承 pytorch
     └── __init__.py        #   适配器注册表 get_adapter()
 ```
 
@@ -99,7 +101,7 @@ test_selector/
 │   ├── <sglang 布局>/
 │   │   └── ____w__sglang__sglang__test__registered__npu__...__test_xxx/
 │   │       └── coverage.linux-*     # sglang：覆盖率文件直接放在测试目录下
-│   └── <pytorch 布局>/
+│   └── <pytorch / torch_npu 布局>/
 │       └── _inductor__test_add/     # pytorch：目录名含 __ 或以 test_ 开头
 │           └── covdata/             # pytorch：覆盖率文件在 covdata/ 子目录
 │               └── coverage.*
@@ -107,12 +109,13 @@ test_selector/
 ├── covstub/                         # 源码目录（函数级匹配需要）
 │   ├── vllm_ascend/                 #   vllm：对应仓库根目录
 │   ├── sglang/                      #   sglang：对应仓库 python/sglang/
-│   └── torch/                       #   torch_npu：对应 pytorch/pytorch 仓库根目录
+│   ├── torch/                       #   pytorch：对应 pytorch/pytorch 仓库根目录
+│   └── torch_npu/                   #   torch_npu：对应 Ascend/pytorch 仓库 torch_npu/ 目录内容
 ├── test_case_map.json               # 自动生成的映射文件
 └── recommended_pytest_paths.txt     # 推荐测试用例列表（输出）
 ```
 
-**覆盖率目录布局自动探测**（三仓库兼容）：
+**覆盖率目录布局自动探测**（各仓库兼容）：
 
 - 测试目录下存在 `covdata/` 子目录（vllm / pytorch 布局）→ 从 `covdata/` 读取 `coverage.*`
 - 无 `covdata/` 子目录（sglang 布局）→ 直接读取测试目录下的 `coverage.*`
@@ -123,7 +126,8 @@ test_selector/
 | ----------- | ------------------------------------------------ |
 | vllm_ascend | 目录名以 `tests__` 开头，或等于 `cpu-ut`                   |
 | sglang      | 目录名以 `____w__sglang__sglang__test__` 开头          |
-| torch_npu   | 目录名含 `__`，或以 `test_` 开头（如 `_inductor__test_add`） |
+| pytorch     | 目录名含 `__`，或以 `test_` 开头，或以 `.py` 结尾（如 `_inductor__test_add`） |
+| torch_npu   | 与 pytorch 一致                                    |
 
 **测试用例名称转换规则**（adapter 提供）：
 
@@ -131,7 +135,8 @@ test_selector/
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | vllm_ascend | `tests__e2e__pull_request__one_card__test_xxx` → `tests/e2e/pull_request/one_card/test_xxx.py`；含 `--test_foo` → `...::test_foo`（函数级）；`cpu-ut` 保持不变                                                  |
 | sglang      | `____w__sglang__sglang__test__registered__npu__basic_function__backends__test_npu_sampling_backend` → `test/registered/npu/basic_function/backends/test_npu_sampling_backend.py`；含 `--` → `::`（函数级） |
-| torch_npu   | `_inductor__test_add` → `_inductor/test_add.py`；含 `--test_foo` → `...::test_foo`（函数级）                                                                                                               |
+| pytorch     | `_inductor__test_add` → `_inductor/test_add.py`；含 `--test_foo` → `...::test_foo`（函数级）                                                                                                     |
+| torch_npu   | 与 pytorch 一致                                                                                                                                                                              |
 
 **产品代码路径前缀**（diff / 覆盖率库路径 → 仓库相对路径）：
 
@@ -139,7 +144,8 @@ test_selector/
 | ----------- | ---------------- | ----------------------------------------------------------------- |
 | vllm_ascend | `vllm_ascend/`   | `vllm_ascend/core/worker.py` → `core/worker.py`                   |
 | sglang      | `python/sglang/` | `python/sglang/srt/models/qwen3_vl.py` → `srt/models/qwen3_vl.py` |
-| torch_npu   | `torch/`         | `torch/distributed/utils.py` → `distributed/utils.py`             |
+| pytorch     | `torch/`         | `torch/distributed/utils.py` → `distributed/utils.py`             |
+| torch_npu   | `torch_npu/`     | `torch_npu/distributed/utils.py` → `distributed/utils.py`         |
 
 ---
 
@@ -160,7 +166,12 @@ python -m test_selector --repo sglang --build-map \
     --coverage-dir "sglang@20260908" \
     --source-dir ./covstub
 
-# torch_npu
+# pytorch（上游 pytorch/pytorch，covstub/torch/ 对应仓库根目录）
+python -m test_selector --repo pytorch --build-map \
+    --coverage-dir "PyTorch@Task20260903" \
+    --source-dir ./covstub
+
+# torch_npu（Ascend/pytorch，covstub/torch_npu/ 对应其 torch_npu/ 目录，规则同 pytorch）
 python -m test_selector --repo torch_npu --build-map \
     --coverage-dir "PyTorch@Task20260903" \
     --source-dir ./covstub
@@ -191,9 +202,14 @@ python -m test_selector --repo sglang \
     --github-pr "sgl-project/sglang#37043" \
     --source-dir ./covstub
 
-# torch_npu（GitHub 上游 pytorch/pytorch）
-python -m test_selector --repo torch_npu \
+# pytorch（GitHub 上游 pytorch/pytorch）
+python -m test_selector --repo pytorch \
     --github-pr "pytorch/pytorch#150000" \
+    --source-dir ./covstub
+
+# torch_npu（GitCode Ascend/pytorch）
+python -m test_selector --repo torch_npu \
+    --gitcode-pr "Ascend/pytorch#123" \
     --source-dir ./covstub
 ```
 
@@ -203,15 +219,15 @@ python -m test_selector --repo torch_npu \
 
 ## 四、核心参数说明
 
-参数默认值由所选仓库适配器（`cli_defaults()`）提供；三仓库当前默认值一致，后续可按仓调整。
+参数默认值由所选仓库适配器（`cli_defaults()`）提供；各仓库当前默认值一致，后续可按仓调整。
 
 ### 公共参数
 
 | 参数                      | 必填       | 说明                                                                                          |
 | ----------------------- | -------- | ------------------------------------------------------------------------------------------- |
-| `--repo` / `-r`         | 否        | 仓库适配器：`vllm_ascend` / `sglang` / `torch_npu`（默认：`vllm_ascend`，薄入口默认各自仓库）                    |
-| `--github-pr` / `-pr`   | 二选一      | GitHub PR（三仓库通用），格式：`owner/repo#pr_number` 或仅 `pr_number`（自动从 git remote 推导）；torch_npu 传上游 `pytorch/pytorch#N` |
-| `--gitcode-pr`          | 二选一      | GitCode PR（公共备用模块，当前无仓库默认使用），格式：`owner/repo#pr_number` 或仅 `pr_number`（自动从 git remote 推导）；两参数互斥     |
+| `--repo` / `-r`         | 否        | 仓库适配器：`vllm_ascend` / `sglang` / `sglang-kernel` / `pytorch` / `torch_npu` / `msmodeling` / `msmodelslim` / `transformer_engine`（默认：`vllm_ascend`，薄入口默认各自仓库）                    |
+| `--github-pr` / `-pr`   | 二选一      | GitHub PR，格式：`owner/repo#pr_number` 或仅 `pr_number`（自动从 git remote 推导）；pytorch 传上游 `pytorch/pytorch#N`                                  |
+| `--gitcode-pr`          | 二选一      | GitCode PR（torch_npu 使用，检测 Ascend/pytorch），格式：`owner/repo#pr_number` 或仅 `pr_number`（自动从 git remote 推导）；两参数互斥     |
 | `--source-dir` / `-s`   | 建议       | 源码目录（默认：`covstub`；函数级匹配与噪音过滤需要）                                                             |
 | `--map-file` / `-m`     | 否        | 映射文件（默认：`test_case_map.json`）                                                               |
 | `--coverage-dir` / `-c` | 构建 map 时 | 覆盖率数据目录（默认：`coverage`）                                                                      |
@@ -243,16 +259,16 @@ if args.disable_function_match:
 
 ### 仓库差异对照
 
-| 维度      | vllm_ascend                                         | sglang                                                          | torch_npu                                                   |
-| ------- | --------------------------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------- |
-| PR 源    | GitHub                                              | GitHub                                                          | GitHub（pytorch/pytorch）                                     |
-| 产品代码前缀  | `vllm_ascend/`                                      | `python/sglang/`                                                | `torch/`                                                     |
-| 测试目录识别  | `tests__` 前缀 / `cpu-ut`                             | `____w__sglang__sglang__test__` 前缀                              | 目录名含 `__` 或以 `test_` 开头                                     |
-| 覆盖率文件位置 | `covdata/` 子目录                                      | 测试目录下直接放置（兼容探测 covdata）                                         | `covdata/` 子目录                                              |
-| 测试文件规则  | `tests/e2e/pull_request/`、`tests/ut/` 下 `test_*.py` | `test/registered/`、`test/{unit,e2e,integration}/` 下 `test_*.py` | `test/` 下 `test_*.py` |
-| 全量触发变更  | csrc/ 目录（非 .md）→ 全量测试                               | 无（csrc/rust 走精准匹配）                                              | 无（原生变更走精准匹配）                                                |
-| 测试名规范化  | `--`→`::`、`__`→`/`、文件级补 `.py`                       | 剥离编码前缀恢复 `test/`、`__`→`/`、`--`→`::`                             | `--`→`::`、`__`→`/`、文件级补 `.py`                               |
-| 变更检测    | 本地哈希比对（默认）或 PR diff                                 | 同左                                                              | 同左                                                          |
+| 维度      | vllm_ascend                                         | sglang                                                          | pytorch                                                          | torch_npu                                                   |
+| ------- | --------------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------- |
+| PR 源    | GitHub                                              | GitHub                                                          | GitHub（pytorch/pytorch）                                          | GitCode（Ascend/pytorch）                                     |
+| 产品代码前缀  | `vllm_ascend/`                                      | `python/sglang/`                                                | `torch/`                                                          | `torch_npu/`                                                |
+| 测试目录识别  | `tests__` 前缀 / `cpu-ut`                             | `____w__sglang__sglang__test__` 前缀                              | 目录名含 `__` 或以 `test_` 开头或以 `.py` 结尾（与 torch_npu 一致）                | 同 pytorch                                                   |
+| 覆盖率文件位置 | `covdata/` 子目录                                      | 测试目录下直接放置（兼容探测 covdata）                                         | `covdata/` 子目录                                                    | `covdata/` 子目录                                              |
+| 测试文件规则  | `tests/e2e/pull_request/`、`tests/ut/` 下 `test_*.py` | `test/registered/`、`test/{unit,e2e,integration}/` 下 `test_*.py` | `test/` 下 `test_*.py`                                             | `test/` 下 `test_*.py` |
+| 全量触发变更  | csrc/ 目录（非 .md）→ 全量测试                               | 无（csrc/rust 走精准匹配）                                              | 无（原生变更走精准匹配）                                                      | 无（原生变更走精准匹配）                                                |
+| 测试名规范化  | `--`→`::`、`__`→`/`、文件级补 `.py`                       | 剥离编码前缀恢复 `test/`、`__`→`/`、`--`→`::`                             | `--`→`::`、`__`→`/`、文件级补 `.py`                                     | 同 pytorch                                                   |
+| 变更检测    | 本地哈希比对（默认）或 PR diff                                 | 同左                                                              | 同左                                                                | 同左                                                          |
 
 ---
 
@@ -273,7 +289,7 @@ if args.disable_function_match:
 
 > sglang 不触发全量：`csrc/*.cu`、`rust/*.rs` 等原生代码变更不会被解析进精准匹配（仅保留 `.py`），推荐结果由 Python 产品代码匹配 + 新增/删除测试文件决定。
 > 
-> torch_npu 不触发全量：`torch/csrc/` 等原生代码（C++/CUDA）变更不会被解析进精准匹配（仅保留 `.py`）。**注意**：纯原生代码变更的 PR 可能返回 0 推荐，此时存在漏测风险，建议人工评估是否需跑相关用例（详见故障排除表）。
+> pytorch / torch_npu 不触发全量：`torch/csrc/`、`torch_npu/csrc/` 等原生代码（C++/CUDA）变更不会被解析进精准匹配（仅保留 `.py`）。**注意**：纯原生代码变更的 PR 可能返回 0 推荐，此时存在漏测风险，建议人工评估是否需跑相关用例（详见故障排除表）。
 
 ### 排除变更场景（diff_parser）
 
@@ -300,7 +316,7 @@ if args.disable_function_match:
 new_tests = pr_detector.get_test_files_from_pr_diff(diff_content, adapter)
 # vllm: 匹配 tests/e2e/pull_request/... 或 tests/ut/... 下 test_*.py
 # sglang: 匹配 test/registered/... 或 test/{unit,e2e,integration}/... 下 test_*.py
-# torch_npu: 匹配 test/ 下 test_*.py
+# pytorch / torch_npu: 匹配 test/ 下 test_*.py
 ```
 
 ### 已删除测试文件处理
@@ -393,7 +409,7 @@ for path, label in file_level_paths:         # rename 旧路径 + 删除路径
 
 ### GitCode PR 拉取（公共备用模块）
 
-GitCode PR 拉取通过公共模块 `test_selector.gitcode`（`--gitcode-pr`，当前无仓库默认使用；torch_npu 已切换到 GitHub 上游仓库 pytorch/pytorch），与 GitHub 版（`test_selector.github`，`--github-pr`）的差异：
+GitCode PR 拉取通过公共模块 `test_selector.gitcode`（`--gitcode-pr`，torch_npu 使用，检测 Ascend/pytorch），与 GitHub 版（`test_selector.github`，`--github-pr`）的差异：
 
 | 维度            | github.py                                            | gitcode.py                                                           |
 | ------------- | ---------------------------------------------------- | -------------------------------------------------------------------- |
@@ -457,8 +473,8 @@ GitCode PR 拉取通过公共模块 `test_selector.gitcode`（`--gitcode-pr`，�
 
 **注意**：
 
-- map 的 key 为 normalize 后的测试路径（vllm：`tests/.../test_xxx.py` 或 `...::test_func`、`cpu-ut`；sglang：`test/.../test_xxx.py`；torch_npu：`test/.../test_xxx.py`、`_inductor/test_add.py` 等，文件级补 `.py`）
-- files 的 key 为剥离产品代码前缀后的相对路径（vllm：`core/worker.py`；sglang：`srt/xxx.py`；torch_npu：`distributed/xxx.py`）
+- map 的 key 为 normalize 后的测试路径（vllm：`tests/.../test_xxx.py` 或 `...::test_func`、`cpu-ut`；sglang：`test/.../test_xxx.py`；pytorch / torch_npu：`test/.../test_xxx.py`、`_inductor/test_add.py` 等，文件级补 `.py`）
+- files 的 key 为剥离产品代码前缀后的相对路径（vllm：`core/worker.py`；sglang：`srt/xxx.py`；pytorch：`distributed/xxx.py`；torch_npu 同，前缀为 `torch_npu/`）
 - 保存时强制使用 LF 换行（`newline="\n"`），避免 Windows CRLF 导致 JSON 体积膨胀，保证跨平台 git 差异对比一致
 
 ---
@@ -539,9 +555,13 @@ python -m test_selector --repo vllm_ascend \
 python -m test_selector --repo sglang \
     --github-pr "sgl-project/sglang#37043" -s ./covstub
 
-# GitHub PR（torch_npu，上游 pytorch/pytorch）
-python -m test_selector --repo torch_npu \
+# GitHub PR（pytorch，上游 pytorch/pytorch）
+python -m test_selector --repo pytorch \
     --github-pr "pytorch/pytorch#150000" -s ./covstub
+
+# GitCode PR（torch_npu，Ascend/pytorch）
+python -m test_selector --repo torch_npu \
+    --gitcode-pr "Ascend/pytorch#123" -s ./covstub
 ```
 
 ### 场景2：更新覆盖率数据后重建映射
@@ -583,7 +603,7 @@ from test_selector.coverage_selector import CoverageSelector
 from test_selector.change_detector import CodeChangeDetector
 from test_selector.test_selector import TestSelector
 
-adapter = get_adapter("sglang")                 # 选择仓库适配器（vllm_ascend / sglang / torch_npu）
+adapter = get_adapter("sglang")                 # 选择仓库适配器（vllm_ascend / sglang / pytorch / torch_npu 等）
 
 selector = CoverageSelector("coverage", "covstub", adapter)
 selector.build_test_case_map()
@@ -610,13 +630,13 @@ selected, reason = ts.select_tests(changed, source_dir="covstub")
 | `函数级匹配失败`                                                           | 源码目录路径不对                                                          | 确认 `--source-dir` 指向包含 `vllm_ascend/` / `sglang/` / `torch/` 包的根目录                                |
 | 推荐结果过多                                                              | 变更函数被大量测试覆盖                                                       | 启用 `--dedup` 或提高 `--min-affected`                                                                     |
 | 推荐结果为空                                                              | PR 仅含原生代码变更且无新测试文件（sglang）                                        | 正常，原生代码变更不触发全量                                                                                        |
-| 推荐结果为空                                                              | PR 仅含原生代码变更（torch_npu，如 `torch/csrc/` 下 C++/CUDA 文件）        | 正常但**存在漏测风险**：原生代码变更不解析进精准匹配；建议人工评估是否需跑相关用例                                                        |
+| 推荐结果为空                                                              | PR 仅含原生代码变更（pytorch / torch_npu，如 `torch/csrc/`、`torch_npu/csrc/` 下 C++/CUDA 文件）        | 正常但**存在漏测风险**：原生代码变更不解析进精准匹配；建议人工评估是否需跑相关用例                                                        |
 | `Full-Suite Changes Detected`（vllm）                                 | diff 含 csrc/ 目录变更                                                 | 正常行为，触发全量测试                                                                                           |
 | `New Test Files Added: X`                                           | diff 中有新增测试文件                                                     | 正常，直接加入推荐列表                                                                                           |
 | `Deleted Test Files Removed: X`                                     | diff 中有已删除测试文件                                                    | 正常，从推荐列表移除                                                                                            |
 | `Detected X Renamed File(s)`                                        | diff 中包含文件重命名                                                     | 正常，旧路径做文件级匹配                                                                                          |
 | 变更行数偏多、含 context 行                                                  | diff 解析按 hunk 范围推算                                                | 已知限制，算法保守偏多报                                                                                          |
-| `Unknown repo 'xxx'`                                                | `--repo` 拼写错误                                                     | 使用 `vllm_ascend` / `sglang` / `torch_npu`                                                             |
+| `Unknown repo 'xxx'`                                                | `--repo` 拼写错误                                                     | 使用 `vllm_ascend` / `sglang` / `pytorch` / `torch_npu` 等（完整清单见 `--repo` 参数说明）                          |
 
 **代理配置示例（华为内网环境）**：
 
@@ -626,7 +646,8 @@ set HTTP_PROXY=http://<user>:<pwd>@proxycn2.huawei.com:8080/
 set HTTPS_PROXY=http://<user>:<pwd>@proxycn2.huawei.com:8080/
 
 python -m test_selector --repo vllm_ascend --github-pr "vllm-project/vllm-ascend#16104" -s ./covstub
-python -m test_selector --repo torch_npu --github-pr "pytorch/pytorch#150000" -s ./covstub
+python -m test_selector --repo pytorch --github-pr "pytorch/pytorch#150000" -s ./covstub
+python -m test_selector --repo torch_npu --gitcode-pr "Ascend/pytorch#123" -s ./covstub
 ```
 
 > **说明**：

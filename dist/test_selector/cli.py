@@ -11,11 +11,8 @@
 用法：
     python -m test_selector --repo vllm_ascend --github-pr owner/repo#123
     python -m test_selector --repo pytorch --github-pr pytorch/pytorch#123     # 上游 pytorch/pytorch
+    python -m test_selector --repo torch_npu --gitcode-pr Ascend/pytorch#123   # Ascend/pytorch（torch_npu 本体，GitCode）
     python -m test_selector --repo sglang --build-map --coverage-dir coverage
-    python -m test_selector --repo sglang-kernel --github-pr "sgl-project/sglang-kernel#123" --operator-repo-root /path/to/sgl-kernel-npu
-    python vllm/test_selector.py --github-pr 123          # 薄入口（默认 vllm_ascend）
-    python sglang/test_selector.py --github-pr 123        # 薄入口（默认 sglang）
-    python PyTorch/test_selector.py --github-pr 123       # 薄入口（默认 torch_npu，检测上游 pytorch/pytorch）
 """
 
 import argparse
@@ -218,6 +215,7 @@ def main(argv=None, default_repo: str = "vllm_ascend") -> None:
                     print(f"  {f}: (INFRA, no tests)")
             csrc_selected = sorted(set(csrc_selected))
             print(f"  -> {len(csrc_selected)} tests from csrc operator mapping")
+
 
     # ===== Action 2: Detect Python product code changes -> Precision matching =====
     selected: list[tuple[str, dict, int]] = []

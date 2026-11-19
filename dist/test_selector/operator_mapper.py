@@ -1,4 +1,4 @@
-﻿"""sgl-kernel-npu csrc 算子 ↔ 测试用例静态映射。
+"""sgl-kernel-npu csrc 算子 ↔ 测试用例静态映射。
 
 覆盖 sglang-kernel 的 csrc 原生代码变更（C++/CANN 算子）：这类文件不在 Python 覆盖率数据里，
 无法用行/函数级精准匹配召回，因此用静态映射补足选择面：

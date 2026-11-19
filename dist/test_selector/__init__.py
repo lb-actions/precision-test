@@ -11,4 +11,4 @@ from .repos import AVAILABLE_REPOS, RepoAdapter, get_adapter
 from .test_selector import TestSelector
 
 __all__ = ["RepoAdapter", "TestSelector", "get_adapter", "AVAILABLE_REPOS"]
-__version__ = "1.0.0"
+__version__ = "1.1.0"
