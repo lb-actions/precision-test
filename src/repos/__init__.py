@@ -9,6 +9,7 @@ from .sglang_kernel import SglangKernelAdapter
 from .pytorch import PytorchAdapter
 from .transformer_engine import TransformerEngineAdapter
 from .vllm_ascend import VllmAscendAdapter
+from .verl import VerlAdapter
 
 __all__ = [
     "RepoAdapter",
@@ -20,6 +21,7 @@ __all__ = [
     "MsmodelingAdapter",
     "MsmodelslimAdapter",
     "TransformerEngineAdapter",
+    "VerlAdapter",
     "get_adapter",
     "AVAILABLE_REPOS",
 ]
@@ -34,6 +36,7 @@ _ADAPTERS = {
     "msmodeling": MsmodelingAdapter,
     "msmodelslim": MsmodelslimAdapter,
     "transformer_engine": TransformerEngineAdapter,
+    "verl": VerlAdapter,
 }
 
 AVAILABLE_REPOS = tuple(_ADAPTERS.keys())
@@ -44,7 +47,7 @@ def get_adapter(repo_name: str) -> RepoAdapter:
 
     Args:
         repo_name: 仓库名（vllm_ascend / sglang / sglang-kernel / pytorch / torch_npu /
-            msmodeling / msmodelslim / transformer_engine）
+            msmodeling / msmodelslim / transformer_engine / verl）
 
     Returns:
         RepoAdapter 实例

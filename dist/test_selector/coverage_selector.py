@@ -65,11 +65,15 @@ class CoverageSelector:
             # 目录名规则由仓库适配器决定（vllm: tests__ 前缀 / cpu-ut；sglang: ____w__... 前缀）
             if not self.adapter.is_test_case_dir(name):
                 continue
-            # 布局探测：covdata/ 子目录（vllm/pytorch）或目录下直接放置（sglang）
-            covdata_dir = item / "covdata"
-            has_cov_files = any(item.glob(self.adapter.coverage_file_glob))
-            if covdata_dir.exists() and any(covdata_dir.glob(self.adapter.coverage_file_glob)):
-                has_cov_files = True
+            # 布局探测：covdata/ 子目录（vllm/pytorch）、目录下直接放置（sglang）、
+            # 多层嵌套（verl: <yml>/<job>/coverage/step-XX/，adapter 开启递归扫描）
+            if self.adapter.recursive_cov_scan:
+                has_cov_files = any(f.is_file() for f in item.rglob(self.adapter.coverage_file_glob))
+            else:
+                covdata_dir = item / "covdata"
+                has_cov_files = any(item.glob(self.adapter.coverage_file_glob))
+                if covdata_dir.exists() and any(covdata_dir.glob(self.adapter.coverage_file_glob)):
+                    has_cov_files = True
             if has_cov_files:
                 rel = item.relative_to(self.coverage_data_dir).as_posix()
                 test_cases.append(rel)
@@ -167,11 +171,17 @@ class CoverageSelector:
 
             file_lines_map = defaultdict(set)  # filepath -> set of lines
 
-            # 布局探测：vllm/pytroch 将 coverage 放在 covdata/ 子目录，sglang 直接放在测试目录下
-            cov_dirs = [covdata_dir] if covdata_dir.exists() else [test_case_dir]
+            # 布局探测：vllm/pytroch 将 coverage 放在 covdata/ 子目录，sglang 直接放在测试目录下；
+            # verl 等多层嵌套布局（adapter 开启递归扫描）时递归收集全部覆盖率文件
+            if self.adapter.recursive_cov_scan:
+                cov_files = [f for f in test_case_dir.rglob(self.adapter.coverage_file_glob) if f.is_file()]
+                cov_file_groups = [(None, cov_files)]
+            else:
+                cov_dirs = [covdata_dir] if covdata_dir.exists() else [test_case_dir]
+                cov_file_groups = [(cov_dir, cov_dir.glob(self.adapter.coverage_file_glob)) for cov_dir in cov_dirs]
 
-            for cov_dir in cov_dirs:
-                for cov_file in cov_dir.glob(self.adapter.coverage_file_glob):
+            for _, cov_files_iter in cov_file_groups:
+                for cov_file in cov_files_iter:
                     covered_lines = self.get_covered_lines_from_file(str(cov_file))
 
                     for filename, lines in covered_lines.items():

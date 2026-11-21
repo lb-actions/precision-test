@@ -27,6 +27,9 @@ class RepoAdapter(ABC):
     #: 参数化用例（...[param_id]）是否合并为无参数条目。
     #: True 时入参实例共享同一函数代码，推荐粒度是函数；False 时保留参数化实例为独立条目
     merge_parametrized_cases: bool = True
+    #: 覆盖率文件是否嵌套在测试目录的多层子目录下（True 时在测试目录内递归扫描）。
+    #: 默认 False：仅在测试目录本身或其 covdata/ 子目录一层扫描
+    recursive_cov_scan: bool = False
 
     # ------------------------------------------------------------------
     # 覆盖率数据处理
@@ -60,6 +63,14 @@ class RepoAdapter(ABC):
         默认返回 False（不触发全量测试）；需要全量触发的仓库覆写此方法。
         """
         return False
+
+    def normalize_recommended_name(self, name: str) -> str:
+        """规范化新/删除测试文件加入推荐列表时的条目名（默认原样）。
+
+        用于推荐粒度与 is_test_file 检测粒度不一致的仓库（如 verl：检测
+        .github/workflows/*.yml，推荐列表只保留 yml 文件名）。
+        """
+        return name
 
     # ------------------------------------------------------------------
     # 路径规范化 / 解析

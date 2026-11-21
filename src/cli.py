@@ -187,8 +187,15 @@ def main(argv=None, default_repo: str = "vllm_ascend") -> None:
         # 读取编码使用 utf-8-sig，兼容带 BOM 的 diff 文件
         with open(diff_file, encoding="utf-8-sig") as f:
             diff_content = f.read()
-        new_test_files = pr_detector.get_test_files_from_pr_diff(diff_content, adapter)
-        deleted_test_files = pr_detector.get_deleted_test_files_from_pr(diff_content, adapter)
+        # 条目名经 adapter 规范化（推荐粒度与检测粒度不一致的仓库，如 verl 的 workflow yml）
+        new_test_files = [
+            adapter.normalize_recommended_name(p)
+            for p in pr_detector.get_test_files_from_pr_diff(diff_content, adapter)
+        ]
+        deleted_test_files = [
+            adapter.normalize_recommended_name(p)
+            for p in pr_detector.get_deleted_test_files_from_pr(diff_content, adapter)
+        ]
         has_full_suite = pr_detector.has_full_suite_changes(diff_content, adapter)
 
     # ===== Action 1b: 非 Markdown csrc 变更 -> 实时构建内存映射（sglang-kernel）=====

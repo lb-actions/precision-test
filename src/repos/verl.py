@@ -1,17 +1,28 @@
-"""verl 仓库适配器（https://github.com/volcengine/verl）。
+"""verl 仓库适配器（https://github.com/verl-project/verl）。
 
-- 注册键 "verl"；repo_name = "verl"（covstub 布局 covstub/verl/...，产品代码前缀 "verl/"）
-- 覆盖率库路径为 CI workspace 安装形态：/__w/verl/verl/verl/xxx.py，
-剥离包前缀后得到相对路径 xxx.py（与 product_code_prefix "verl/" 约定一致）
-- 测试用例目录：workflows/<workflow>.yml（一个 workflow yml 即一个用例），
-覆盖率文件位于其下 <job>/coverage/step-*/coverage.*，需要递归发现
-- 测试文件规则：.github/workflows/ 下的 yml/yaml（workflow 本身即用例）
-- 测试名规范化：workflow yml 文件名（如 e2e_ascend.yml），PR 检测路径经同一
-normalize_test_name 归一，保证 map 用例名与 PR 新增用例名形态一致
+verl（Volcano Engine Reinforcement Learning）产品代码位于仓库根的 verl/ 包。
+
+覆盖率数据特征（coverage.py v7 SQLite 格式，GitHub Actions 采集）：
+- 覆盖率根目录下按 workflow yml 文件名建目录（e2e_ascend.yml/ 等），
+  层级为 <yml>/<job>/<coverage/step-XX>/coverage.linux-...（多层嵌套，
+  需要 recursive_cov_scan 递归扫描）
+- 每个 yml 目录即一个"测试用例"：map 的 key 为 yml 文件名（如 e2e_ascend.yml），
+  value 为该 yml 目录下所有覆盖率数据的并集
+- 覆盖率库路径形如 /__w/verl/verl/verl/protocol.py：
+  /__w/verl/verl 为 GitHub Actions 工作区+仓库目录，最后的 verl/ 为产品包，
+  剥离后得到包内相对路径（如 trainer/main_ppo.py）
+- job 目录下存在名为 coveragerc 的纯文本配置文件，coverage_file_glob
+  必须用 "coverage.*"（带点）避免误匹配
+
+- repo_name = "verl"，product_code_prefix = "verl/"，map 的 key 为剥离包前缀后的
+  相对路径（如 trainer/main_ppo.py、protocol.py）
+- 源文件解析 source_dir/verl/<rel>（-s 指向含 verl/ 目录的源码根），沿用基类默认实现
+- PR 推荐：PR 改动的产品代码命中的 yml 即推荐结果（yml 列表）；
+  PR 改动 .github/workflows/*.yml 本身时直接推荐对应 yml
 """
 
 import re
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 
 from .base import RepoAdapter
 
@@ -21,53 +32,49 @@ class VerlAdapter(RepoAdapter):
 
     repo_name = "verl"
     product_code_prefix = "verl/"
-
-    #: 覆盖率文件名形如 coverage.linux-aarch64-...-workflow.<pid>.<rand>；
-    #: 用 "coverage.*" 精确匹配，避免误匹配 job 目录下的 coveragerc 配置
+    test_case_dir_prefix = None
+    #: 带点匹配，规避 job 目录下的 coveragerc 纯文本配置文件
     coverage_file_glob = "coverage.*"
+    #: 覆盖率文件嵌套在 <yml>/<job>/coverage/step-XX/ 多层目录下，需递归扫描
+    recursive_cov_scan = True
 
-    #: 精确匹配 CI 安装形态中的 /verl/verl/verl/ 段（workspace/仓库/包），
-    #: 剥离到包根目录，得到与 product_code_prefix 一致的相对路径（如 protocol.py）
-    _PKG_PATH_RE = re.compile(r"(?:^|/)verl/verl/verl/(.+)")
+    #: 覆盖率库路径 /__w/verl/verl/verl/xxx.py -> 剥离工作区+仓库目录+产品包三层前缀
+    _COV_PATH_RE = re.compile(r"(?:^|/)verl/verl/verl/(.+)$")
 
-    #: 可纳入 PR 检测的测试根目录（workflow yml 即测试用例）
-    TEST_ROOTS = (".github/workflows/",)
+    #: workflow yml 在仓库内的目录（PR 改动 yml 本身时直接推荐对应 yml）
+    WORKFLOW_DIR = ".github/workflows/"
 
     # ------------------------------------------------------------------
     # 覆盖率数据处理
     # ------------------------------------------------------------------
-    def coverage_files_for(self, test_case_dir: Path) -> list[Path]:
-        """递归发现 workflow 目录下所有 job/step 的覆盖率文件。"""
-        return sorted(p for p in test_case_dir.rglob(self.coverage_file_glob) if p.is_file())
-
     def is_test_case_dir(self, name: str) -> bool:
-        # 用例目录名即 workflow 文件名：e2e_ascend.yml / model_ascend.yml
+        """覆盖率根目录下以 workflow yml/yaml 文件名命名的目录（如 e2e_ascend.yml）。"""
         return name.endswith((".yml", ".yaml"))
 
     def normalize_test_name(self, test_name: str) -> str:
-        """workflow yml 文件名即标准用例名（如 e2e_ascend.yml）。
-
-        取 basename，兼容覆盖率根目录传入 workflows 的父目录时
-        用例目录为 workflows/e2e_ascend.yml 的情况。
-        """
-        return PurePosixPath(test_name).name
+        """测试用例目录名即 yml 文件名（e2e_ascend.yml），无需转换。"""
+        return test_name
 
     def covered_path_to_rel(self, path: str) -> str | None:
-        """将 /__w/verl/verl/verl/xxx.py 转换为包相对路径 xxx.py。"""
-        match = self._PKG_PATH_RE.search(path)
-        if match:
-            return match.group(1)
-        # 已带产品代码前缀（verl/xxx.py）时剥离前缀
-        if path.startswith(self.product_code_prefix):
-            return path[len(self.product_code_prefix):]
-        return None
+        """剥离 /__w/verl/verl/ 工作区前缀与 verl/ 产品包前缀，得到包内相对路径；非产品代码返回 None。"""
+        match = self._COV_PATH_RE.search(path)
+        return match.group(1) if match else None
 
     # ------------------------------------------------------------------
     # 测试文件检测（PR 内容检测）
     # ------------------------------------------------------------------
     def is_test_file(self, path: str) -> bool:
-        return path.startswith(self.TEST_ROOTS) and path.endswith((".yml", ".yaml"))
+        """PR 改动 workflow yml 本身视为"测试变更"：直接推荐对应 yml。
 
-    def normalize_pr_test_file(self, path: str) -> str:
-        """PR 检测路径转换为 workflow 文件名，与 map 用例名形态一致。"""
-        return PurePosixPath(path).name
+        verl 的推荐粒度是 workflow yml（而非测试脚本），tests/ 下新增测试脚本
+        无法通过覆盖率映射到具体 yml，不做处理。
+        """
+        p = PurePosixPath(path)
+        return (
+            path.startswith(self.WORKFLOW_DIR)
+            and p.suffix in (".yml", ".yaml")
+        )
+
+    def normalize_recommended_name(self, name: str) -> str:
+        """.github/workflows/e2e_ascend.yml -> e2e_ascend.yml（与 map 的 key 对齐）。"""
+        return name.removeprefix(self.WORKFLOW_DIR)
